@@ -1,0 +1,26 @@
+{
+  "ws_url": "ws://127.0.0.1:3001",
+  "access_token": "",
+  "napcat_launcher": "",
+  "group_ids": [],
+  "group_names": {},
+  "group_default_origins": {},
+  "output_root": "data",
+  "rules_file": "freight_rules.json",
+  "accept_self_messages": true,
+  "ocr_enabled": true,
+  "ocr_script": "windows_ocr.ps1",
+  "status_dashboard": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "backup_retention_days": 30,
+  "time_check_urls": [
+    "https://www.microsoft.com",
+    "https://www.qq.com",
+    "https://www.baidu.com"
+  ],
+  "reconnect_seconds": 5,
+  "rebuild_on_start": true
+}
