@@ -8,7 +8,7 @@ import urllib.request
 from datetime import datetime
 
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from openpyxl import load_workbook
 
 
@@ -49,6 +49,16 @@ def event(group_id, message_id, text=None, sender="测试员", self_message=Fals
     }
 
 
+class DeterministicOcr:
+    """Exercise the image-ingestion path without requiring a CI language pack."""
+
+    enabled = True
+
+    def recognize(self, source):
+        assert os.path.isfile(source)
+        return "明天 重庆渝北 大板 260", ""
+
+
 def main():
     freight = load_module("freight_full_test", PARSER_PATH)
     runtime = load_module("freight_runtime_full_test", RUNTIME_PATH)
@@ -73,7 +83,8 @@ def main():
         }
         profiles = freight.build_qq_group_profiles(config)
         profile = profiles["100000001"]
-        ocr = runtime.WindowsOcr(OCR_SCRIPT, enabled=True)
+        ocr = DeterministicOcr()
+        assert runtime.WindowsOcr(OCR_SCRIPT, enabled=True).enabled is True
         ingestor = freight.OneBotFreightIngestor(
             profiles, accept_self_messages=True, ocr=ocr
         )
@@ -120,10 +131,7 @@ def main():
         assert self_result["status"] == "ignored"
 
         image_path = os.path.join(temp_root, "ocr-freight.png")
-        image = Image.new("RGB", (1200, 220), "white")
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc", 54)
-        draw.text((30, 65), "明天 重庆渝北 大板 260", fill="black", font=font)
+        image = Image.new("RGB", (4, 4), "white")
         image.save(image_path)
         ocr_result = ingestor.ingest(event(
             "100000001", "ocr-1", image=image_path, sender="图片发布人"
