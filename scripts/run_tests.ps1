@@ -1,4 +1,6 @@
 $ErrorActionPreference = "Stop"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $python = if ($env:FREIGHT_PYTHON) { $env:FREIGHT_PYTHON } else { "python" }
 

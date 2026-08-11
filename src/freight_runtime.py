@@ -83,8 +83,8 @@ class NetworkClock:
             try:
                 result = subprocess.run(
                     ["w32tm", "/resync", "/force"],
-                    capture_output=True,
-                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=15,
                     creationflags=CREATE_NO_WINDOW,
                 )
