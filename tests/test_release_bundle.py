@@ -38,6 +38,9 @@ def main() -> None:
     installer_script = (ROOT / "installer" / "assets" / "install_napcat.ps1").read_text(
         encoding="utf-8"
     )
+    packaged_verifier = (ROOT / "tests" / "verify_packaged_release.ps1").read_text(
+        encoding="utf-8"
+    )
     installer_batch = (ROOT / "installer" / "assets" / "安装NapCatQQ.bat").read_text(
         encoding="ascii"
     )
@@ -48,8 +51,18 @@ def main() -> None:
     assert "Get-FileHash" in build_script
     assert "The NapCatQQ archive contains QQ.exe" in build_script
     assert "Convert-BatchFilesToWindowsFormat" in build_script
+    assert "[IO.File]::Move($partialNapcat, $napcatCache)" in build_script
+    assert "[IO.File]::Move($partialNapcat, $napcatCache, $true)" not in build_script
     assert "Get-FileHash" in installer_script
     assert 'Filter "QQ.exe"' in installer_script
+    assert 'set `"NAPCAT_DIR=%~dp0$version\\napcat`"' in installer_script
+    assert 'pushd `"%NAPCAT_DIR%`"' in installer_script
+    assert 'call `"launcher.bat`"' in installer_script
+    assert 'call `"launcher-win10.bat`"' in installer_script
+    assert "NAPCAT_LAUNCHER_CHECK_OK" in installer_script
+    assert 'call `"%~dp0$version\\napcat\\launcher.bat`"' not in installer_script
+    assert "NAPCAT_BATCH_CHECK_OK" in packaged_verifier
+    assert 'Join-Path $appDir "安装NapCatQQ.bat"' not in packaged_verifier
     assert "install_napcat.ps1" in installer_batch
     assert "NAPCAT_BATCH_CHECK_OK" in installer_batch
     assert "install_napcat.ps1" in inno_script
@@ -62,6 +75,7 @@ def main() -> None:
         "qq_exclusion_required": True,
         "license_included": True,
         "windows_launcher_configured": True,
+        "napcat_working_directory_guarded": True,
         "lifecycle_defaults_preserved": True,
     }, ensure_ascii=False))
 
