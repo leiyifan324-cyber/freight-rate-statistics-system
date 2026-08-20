@@ -35,17 +35,26 @@ def main() -> None:
     assert config["data_lifecycle"]["backup_retention_days"] == 7
 
     build_script = (ROOT / "scripts" / "build_release.ps1").read_text(encoding="utf-8")
-    installer_script = (ROOT / "installer" / "assets" / "安装NapCatQQ.ps1").read_text(
+    installer_script = (ROOT / "installer" / "assets" / "install_napcat.ps1").read_text(
         encoding="utf-8"
+    )
+    installer_batch = (ROOT / "installer" / "assets" / "安装NapCatQQ.bat").read_text(
+        encoding="ascii"
     )
     inno_script = (ROOT / "installer" / "FreightQuoteSystem.iss").read_text(
         encoding="utf-8"
     )
+    git_attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert "Get-FileHash" in build_script
     assert "The NapCatQQ archive contains QQ.exe" in build_script
+    assert "Convert-BatchFilesToWindowsFormat" in build_script
     assert "Get-FileHash" in installer_script
     assert 'Filter "QQ.exe"' in installer_script
-    assert "安装NapCatQQ.ps1" in inno_script
+    assert "install_napcat.ps1" in installer_batch
+    assert "NAPCAT_BATCH_CHECK_OK" in installer_batch
+    assert "install_napcat.ps1" in inno_script
+    assert "*.bat text eol=crlf" in git_attributes
+    assert "*.cmd text eol=crlf" in git_attributes
 
     print(json.dumps({
         "napcat_release_pinned": True,

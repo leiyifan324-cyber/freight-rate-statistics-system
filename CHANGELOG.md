@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-20
+
+### Fixed
+
+- 将Windows发行包中的批处理脚本强制转换为ASCII内容和CRLF换行，修复 `cmd.exe` 将 `setlocal`、`powershell.exe` 等命令截断的问题。
+- NapCat安装入口改用ASCII脚本文件名，并增加批处理格式与实际 `--check` 回归验证，避免中文Windows代码页导致脚本路径解析失败。
+
+## [1.1.0] - 2026-08-20
+
 ### Added
 
 - Windows Release原样内置经SHA-256校验的NapCatQQ Shell Windows Node官方包、完整许可和一键解压安装入口，不包含腾讯QQ。

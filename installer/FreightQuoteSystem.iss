@@ -52,7 +52,7 @@ Name: "installnapcat"; Description: "安装内置NapCatQQ组件（不包含QQ）
 
 [Run]
 Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode install-autostart"; Tasks: autostart; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\安装NapCatQQ.ps1"""; Tasks: installnapcat; Flags: postinstall skipifsilent; Description: "安装NapCatQQ组件（不包含QQ）"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install_napcat.ps1"""; Tasks: installnapcat; Flags: postinstall skipifsilent; Description: "安装NapCatQQ组件（不包含QQ）"
 Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode start"; Flags: nowait postinstall skipifsilent; Description: "启动物流运价统计系统并打开管理页面"
 
 [UninstallRun]

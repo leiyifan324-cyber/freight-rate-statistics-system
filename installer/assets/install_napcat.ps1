@@ -51,18 +51,20 @@ if (-not (Test-Path -LiteralPath $launcher) -or -not (Test-Path -LiteralPath $wi
     throw "NapCatQQ launchers were not found after extraction."
 }
 
+$version = [string]$manifest.version
 $stableLauncher = Join-Path $InstallRoot "Start-NapCat.cmd"
 $launcherLines = @(
     "@echo off",
     "setlocal EnableExtensions",
     "for /f %%B in ('powershell.exe -NoProfile -Command `[Environment`]::OSVersion.Version.Build') do set `"WINDOWS_BUILD=%%B`"",
     "if %WINDOWS_BUILD% LSS 22000 (",
-    "    call `"$win10Launcher`"",
+    "    call `"%~dp0$version\napcat\launcher-win10.bat`"",
     ") else (",
-    "    call `"$launcher`"",
+    "    call `"%~dp0$version\napcat\launcher.bat`"",
     ")"
 )
-[IO.File]::WriteAllLines($stableLauncher, $launcherLines, [Text.UTF8Encoding]::new($false))
+$launcherContent = ($launcherLines -join "`r`n") + "`r`n"
+[IO.File]::WriteAllText($stableLauncher, $launcherContent, [Text.ASCIIEncoding]::new())
 [IO.File]::WriteAllText(
     (Join-Path $InstallRoot "installed-release.json"),
     ($manifest | ConvertTo-Json -Depth 8),

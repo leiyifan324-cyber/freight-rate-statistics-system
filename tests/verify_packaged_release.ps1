@@ -16,17 +16,35 @@ $rulesFile = Join-Path $appDir "freight_rules.json"
 $napcatRoot = Join-Path $appDir "third_party\NapCatQQ"
 $napcatManifestPath = Join-Path $napcatRoot "napcat-shell-windows-node.json"
 $napcatLicensePath = Join-Path $napcatRoot "NAPCAT_LICENSE.txt"
-$napcatInstallerPath = Join-Path $appDir "安装NapCatQQ.ps1"
+$napcatInstallerPath = Join-Path $appDir "install_napcat.ps1"
+$napcatBatchPath = Join-Path $appDir "安装NapCatQQ.bat"
 if (-not (Test-Path -LiteralPath $executable)) {
     throw "Packaged executable was not found: $executable"
 }
 if (-not (Test-Path -LiteralPath $rulesFile)) {
     throw "Packaged rules file was not found: $rulesFile"
 }
-foreach ($requiredPath in @($napcatManifestPath, $napcatLicensePath, $napcatInstallerPath)) {
+foreach ($requiredPath in @($napcatManifestPath, $napcatLicensePath, $napcatInstallerPath, $napcatBatchPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Packaged NapCatQQ component was not found: $requiredPath"
     }
+}
+
+$batchFiles = Get-ChildItem -LiteralPath $appDir -Recurse -File |
+    Where-Object { $_.Extension -in ".bat", ".cmd" }
+foreach ($batchFile in $batchFiles) {
+    $batchBytes = [IO.File]::ReadAllBytes($batchFile.FullName)
+    if ($batchBytes | Where-Object { $_ -gt 127 } | Select-Object -First 1) {
+        throw "Packaged Windows command script is not ASCII-only: $($batchFile.FullName)"
+    }
+    $batchText = [Text.Encoding]::ASCII.GetString($batchBytes)
+    if ($batchText -match "(?<!`r)`n") {
+        throw "Packaged Windows command script contains non-CRLF line endings: $($batchFile.FullName)"
+    }
+}
+& $napcatBatchPath --check
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged NapCatQQ batch entry failed its command-shell check."
 }
 $napcatManifest = Get-Content -LiteralPath $napcatManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $napcatArchivePath = Join-Path $napcatRoot ([string]$napcatManifest.asset_name)
@@ -44,6 +62,14 @@ $stableNapcatLauncher = Join-Path $napcatInstallRoot "Start-NapCat.cmd"
 $versionedNapcatLauncher = Join-Path $napcatInstallRoot "$($napcatManifest.version)\napcat\launcher.bat"
 if (-not (Test-Path -LiteralPath $stableNapcatLauncher) -or -not (Test-Path -LiteralPath $versionedNapcatLauncher)) {
     throw "NapCatQQ installer did not produce the expected launchers."
+}
+$stableLauncherBytes = [IO.File]::ReadAllBytes($stableNapcatLauncher)
+if ($stableLauncherBytes | Where-Object { $_ -gt 127 } | Select-Object -First 1) {
+    throw "Stable NapCatQQ launcher is not ASCII-only."
+}
+$stableLauncherText = [Text.Encoding]::ASCII.GetString($stableLauncherBytes)
+if ($stableLauncherText -match "(?<!`r)`n") {
+    throw "Stable NapCatQQ launcher contains non-CRLF line endings."
 }
 if (Get-ChildItem -LiteralPath $napcatInstallRoot -Recurse -File -Filter "QQ.exe" -ErrorAction SilentlyContinue) {
     throw "NapCatQQ installation unexpectedly contains QQ.exe."

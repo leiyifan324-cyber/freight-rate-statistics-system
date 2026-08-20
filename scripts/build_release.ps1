@@ -35,6 +35,21 @@ function Reset-SafeDirectory([string]$Path) {
     New-Item -ItemType Directory -Path $fullPath | Out-Null
 }
 
+function Convert-BatchFilesToWindowsFormat([string]$Root) {
+    $asciiEncoding = [Text.ASCIIEncoding]::new()
+    $batchFiles = Get-ChildItem -LiteralPath $Root -Recurse -File |
+        Where-Object { $_.Extension -in ".bat", ".cmd" }
+    foreach ($batchFile in $batchFiles) {
+        $content = [IO.File]::ReadAllText($batchFile.FullName)
+        if ($content.ToCharArray() | Where-Object { [int]$_ -gt 127 } | Select-Object -First 1) {
+            throw "Windows command script must contain ASCII text only: $($batchFile.FullName)"
+        }
+        $normalized = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+        $windowsContent = $normalized.Replace("`n", "`r`n")
+        [IO.File]::WriteAllText($batchFile.FullName, $windowsContent, $asciiEncoding)
+    }
+}
+
 Reset-SafeDirectory $buildRoot
 Reset-SafeDirectory $releaseRoot
 
@@ -91,6 +106,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\windows_ocr.ps1") -Destinat
 Copy-Item -LiteralPath (Join-Path $repoRoot "README.md"),(Join-Path $repoRoot "LICENSE"),(Join-Path $repoRoot "THIRD_PARTY_NOTICES.md"),(Join-Path $repoRoot "CHANGELOG.md") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs") -Destination (Join-Path $staging "docs") -Recurse
 Copy-Item -Path (Join-Path $repoRoot "installer\assets\*") -Destination $staging
+Convert-BatchFilesToWindowsFormat $staging
 
 $napcatStaging = Join-Path $staging "third_party\NapCatQQ"
 New-Item -ItemType Directory -Path $napcatStaging -Force | Out-Null
