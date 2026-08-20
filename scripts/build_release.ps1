@@ -75,7 +75,8 @@ if ($downloadNapcat) {
         [IO.File]::Delete($partialNapcat)
         throw "NapCatQQ archive SHA-256 mismatch. Expected $expectedNapcatHash, got $downloadedHash"
     }
-    [IO.File]::Move($partialNapcat, $napcatCache, $true)
+    [IO.File]::Delete($napcatCache)
+    [IO.File]::Move($partialNapcat, $napcatCache)
 }
 
 $env:FREIGHT_PYTHON = $Python

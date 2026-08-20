@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-08-20
+
+### Fixed
+
+- NapCat稳定启动器现在根据自身安装位置解析版本目录，并在调用官方启动脚本前切换到实际 `napcat` 目录，修复官方脚本依赖 `%cd%` 时错误查找根目录下 `NapCatWinBootMain.exe` 的问题。
+- 增加稳定启动器 `--check` 命令行回归验证，实际确认安装路径、工作目录、ASCII内容和CRLF换行均正确。
+- 发布脚本的NapCat缓存替换改为兼容Windows PowerShell的两参数文件移动方式。
+- 发布包冒烟测试改用ASCII内容标记定位NapCat安装入口，避免Windows PowerShell 5.1因中文代码页误判文件缺失。
+
 ## [1.1.1] - 2026-08-20
 
 ### Fixed

@@ -17,7 +17,14 @@ $napcatRoot = Join-Path $appDir "third_party\NapCatQQ"
 $napcatManifestPath = Join-Path $napcatRoot "napcat-shell-windows-node.json"
 $napcatLicensePath = Join-Path $napcatRoot "NAPCAT_LICENSE.txt"
 $napcatInstallerPath = Join-Path $appDir "install_napcat.ps1"
-$napcatBatchPath = Join-Path $appDir "安装NapCatQQ.bat"
+$napcatBatchCandidates = @(Get-ChildItem -LiteralPath $appDir -File -Filter "*.bat" | Where-Object {
+    $candidateBytes = [IO.File]::ReadAllBytes($_.FullName)
+    [Text.Encoding]::ASCII.GetString($candidateBytes).Contains("NAPCAT_BATCH_CHECK_OK")
+})
+if ($napcatBatchCandidates.Count -ne 1) {
+    throw "Expected exactly one packaged NapCatQQ batch entry, found $($napcatBatchCandidates.Count)."
+}
+$napcatBatchPath = $napcatBatchCandidates[0].FullName
 if (-not (Test-Path -LiteralPath $executable)) {
     throw "Packaged executable was not found: $executable"
 }
@@ -70,6 +77,21 @@ if ($stableLauncherBytes | Where-Object { $_ -gt 127 } | Select-Object -First 1)
 $stableLauncherText = [Text.Encoding]::ASCII.GetString($stableLauncherBytes)
 if ($stableLauncherText -match "(?<!`r)`n") {
     throw "Stable NapCatQQ launcher contains non-CRLF line endings."
+}
+$requiredLauncherSnippets = @(
+    'set "NAPCAT_DIR=%~dp0',
+    'pushd "%NAPCAT_DIR%"',
+    'call "launcher.bat"',
+    'call "launcher-win10.bat"'
+)
+foreach ($requiredSnippet in $requiredLauncherSnippets) {
+    if (-not $stableLauncherText.Contains($requiredSnippet)) {
+        throw "Stable NapCatQQ launcher is missing its working-directory guard: $requiredSnippet"
+    }
+}
+$launcherCheckOutput = @(& $stableNapcatLauncher --check)
+if ($LASTEXITCODE -ne 0 -or $launcherCheckOutput -notcontains "NAPCAT_LAUNCHER_CHECK_OK") {
+    throw "Stable NapCatQQ launcher failed its working-directory command-shell check."
 }
 if (Get-ChildItem -LiteralPath $napcatInstallRoot -Recurse -File -Filter "QQ.exe" -ErrorAction SilentlyContinue) {
     throw "NapCatQQ installation unexpectedly contains QQ.exe."
