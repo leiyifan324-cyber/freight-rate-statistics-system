@@ -20,6 +20,8 @@ $pyInstallerDist = Join-Path $buildRoot "pyinstaller-dist"
 $pyInstallerWork = Join-Path $buildRoot "pyinstaller-work"
 $portableRoot = Join-Path $buildRoot "portable"
 $staging = Join-Path $portableRoot "FreightQuoteSystem"
+$thirdPartyRoot = Join-Path $repoRoot "third_party"
+$napcatManifestPath = Join-Path $thirdPartyRoot "napcat-shell-windows-node.json"
 
 function Reset-SafeDirectory([string]$Path) {
     $fullPath = [IO.Path]::GetFullPath($Path)
@@ -35,6 +37,31 @@ function Reset-SafeDirectory([string]$Path) {
 
 Reset-SafeDirectory $buildRoot
 Reset-SafeDirectory $releaseRoot
+
+if (-not (Test-Path -LiteralPath $napcatManifestPath)) {
+    throw "NapCatQQ release manifest was not found: $napcatManifestPath"
+}
+$napcatManifest = Get-Content -LiteralPath $napcatManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$napcatCacheRoot = Join-Path $repoRoot ".release-cache"
+New-Item -ItemType Directory -Path $napcatCacheRoot -Force | Out-Null
+$napcatCache = Join-Path $napcatCacheRoot ("NapCat.Shell.Windows.Node-" + $napcatManifest.version + ".zip")
+$expectedNapcatHash = ([string]$napcatManifest.sha256).ToLowerInvariant()
+$downloadNapcat = $true
+if (Test-Path -LiteralPath $napcatCache) {
+    $cachedHash = (Get-FileHash -LiteralPath $napcatCache -Algorithm SHA256).Hash.ToLowerInvariant()
+    $downloadNapcat = $cachedHash -ne $expectedNapcatHash
+}
+if ($downloadNapcat) {
+    $partialNapcat = $napcatCache + ".download"
+    [IO.File]::Delete($partialNapcat)
+    Invoke-WebRequest -Uri ([string]$napcatManifest.download_url) -OutFile $partialNapcat
+    $downloadedHash = (Get-FileHash -LiteralPath $partialNapcat -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($downloadedHash -ne $expectedNapcatHash) {
+        [IO.File]::Delete($partialNapcat)
+        throw "NapCatQQ archive SHA-256 mismatch. Expected $expectedNapcatHash, got $downloadedHash"
+    }
+    [IO.File]::Move($partialNapcat, $napcatCache, $true)
+}
 
 $env:FREIGHT_PYTHON = $Python
 & (Join-Path $PSScriptRoot "run_tests.ps1")
@@ -64,6 +91,34 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\windows_ocr.ps1") -Destinat
 Copy-Item -LiteralPath (Join-Path $repoRoot "README.md"),(Join-Path $repoRoot "LICENSE"),(Join-Path $repoRoot "THIRD_PARTY_NOTICES.md"),(Join-Path $repoRoot "CHANGELOG.md") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs") -Destination (Join-Path $staging "docs") -Recurse
 Copy-Item -Path (Join-Path $repoRoot "installer\assets\*") -Destination $staging
+
+$napcatStaging = Join-Path $staging "third_party\NapCatQQ"
+New-Item -ItemType Directory -Path $napcatStaging -Force | Out-Null
+Copy-Item -LiteralPath $napcatManifestPath,(Join-Path $thirdPartyRoot "NAPCAT_LICENSE.txt"),(Join-Path $thirdPartyRoot "NAPCAT_SOURCE.txt") -Destination $napcatStaging
+Copy-Item -LiteralPath $napcatCache -Destination (Join-Path $napcatStaging ([string]$napcatManifest.asset_name))
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$napcatArchive = [IO.Compression.ZipFile]::OpenRead((Join-Path $napcatStaging ([string]$napcatManifest.asset_name)))
+try {
+    $entryNames = @($napcatArchive.Entries | ForEach-Object { $_.FullName.Replace('\', '/').ToLowerInvariant() })
+    if ($entryNames -contains "qq.exe" -or @($entryNames | Where-Object { $_.EndsWith("/qq.exe") }).Count -gt 0) {
+        throw "The NapCatQQ archive contains QQ.exe; publishing was stopped."
+    }
+    foreach ($requiredEntry in @("napcat/launcher.bat", "napcat/launcher-win10.bat")) {
+        if ($entryNames -notcontains $requiredEntry) {
+            throw "The NapCatQQ archive is missing $requiredEntry"
+        }
+    }
+}
+finally {
+    $napcatArchive.Dispose()
+}
+
+$packageTestRoot = Join-Path $buildRoot "packaged-smoke-test"
+& (Join-Path $repoRoot "tests\verify_packaged_release.ps1") -AppDir $staging -TestRoot $packageTestRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged release smoke test failed"
+}
 
 $portableZip = Join-Path $releaseRoot "FreightQuoteSystem-Portable-v$Version.zip"
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $portableZip -CompressionLevel Optimal

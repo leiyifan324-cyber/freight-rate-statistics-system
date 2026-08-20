@@ -1,0 +1,16 @@
+NapCatQQ Shell Windows Node
+================================
+
+Upstream project: https://github.com/NapNeko/NapCatQQ
+Upstream release: https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.19
+Bundled asset: NapCat.Shell.Windows.Node.zip
+Version: v4.18.19
+SHA-256: a08e7bebe49f656807f198bbf3a5d3f2fd6f840499728d665285323db4342d77
+Copyright: Copyright © 2024 Mlikiowa
+
+The upstream archive is redistributed unchanged. It contains NapCatQQ and its
+Node runtime. It does not contain Tencent QQ. Tencent QQ must be installed by
+the user from Tencent's official channel.
+
+NapCatQQ is subject to its Limited Redistribution License, including its
+non-commercial-use restriction. See NAPCAT_LICENSE.txt.

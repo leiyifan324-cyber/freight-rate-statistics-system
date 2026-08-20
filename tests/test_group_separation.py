@@ -80,7 +80,9 @@ def main():
         for output_dir in (gg_dir, nn_dir):
             assert os.path.exists(os.path.join(output_dir, freight.REPORT_XLSX))
             assert os.path.exists(os.path.join(output_dir, freight.DATABASE_FILE))
-            assert os.path.exists(os.path.join(output_dir, freight.HISTORY_DAILY_CSV))
+            assert not os.path.exists(os.path.join(output_dir, freight.HISTORY_DAILY_CSV))
+            with pd.ExcelFile(os.path.join(output_dir, freight.REPORT_XLSX)) as workbook:
+                assert "历史每日平均运价" in workbook.sheet_names
 
         manual_dir = os.path.join(temp_root, "manual-mode")
         os.makedirs(manual_dir, exist_ok=True)
