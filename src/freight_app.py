@@ -6,7 +6,6 @@ import argparse
 import os
 import subprocess
 import sys
-import webbrowser
 
 import freight_supervisor
 import qq_freight_parser
@@ -33,9 +32,11 @@ def run_parser(mode: str, config: str = "", data_dir: str = "") -> int:
         sys.argv = original
 
 
-def open_dashboard() -> int:
-    webbrowser.open("http://127.0.0.1:8765/?view=config")
-    return 0
+def open_dashboard(config: str) -> int:
+    return 0 if freight_supervisor.open_dashboard_when_ready(
+        config,
+        view="config",
+    ) else 2
 
 
 def run_manual() -> int:
@@ -54,17 +55,19 @@ def main() -> int:
     parser.add_argument(
         "--mode",
         choices=[
-            "supervisor", "qq-live", "qq-groups", "manual", "file-once",
+            "start", "supervisor", "qq-live", "qq-groups", "manual", "file-once",
             "open-dashboard", "install-autostart", "uninstall-autostart", "shutdown",
         ],
-        default="supervisor",
+        default="start",
     )
     parser.add_argument("--config", default="")
     args = parser.parse_args()
     config = args.config or os.path.join(application_dir(), "qq_live_config.json")
 
+    if args.mode == "start":
+        return freight_supervisor.start_system(config)
     if args.mode == "supervisor":
-        return freight_supervisor.main()
+        return freight_supervisor.main(config)
     if args.mode == "qq-live":
         return run_parser("qq-live", config=config)
     if args.mode == "qq-groups":
@@ -74,7 +77,7 @@ def main() -> int:
     if args.mode == "file-once":
         return run_parser("file-once", data_dir=os.path.join(application_dir(), "手动文本统计"))
     if args.mode == "open-dashboard":
-        return open_dashboard()
+        return open_dashboard(config)
     if args.mode == "install-autostart":
         return freight_supervisor.install_autostart()
     if args.mode == "uninstall-autostart":

@@ -1,7 +1,7 @@
 {
   "ws_url": "ws://127.0.0.1:3001",
   "access_token": "",
-  "napcat_launcher": "",
+  "napcat_launcher": "%LOCALAPPDATA%\\NapCatQQ\\Start-NapCat.cmd",
   "group_ids": [],
   "group_names": {},
   "group_default_origins": {},
@@ -15,12 +15,25 @@
     "host": "127.0.0.1",
     "port": 8765
   },
-  "backup_retention_days": 30,
+  "backup_retention_days": 7,
+  "data_lifecycle": {
+    "enabled": true,
+    "maintenance_interval_minutes": 1440,
+    "processed_message_retention_days": 1,
+    "rejected_message_retention_days": 1,
+    "dead_letter_retention_days": 1,
+    "freight_record_retention_days": 0,
+    "backup_retention_days": 7
+  },
+  "group_data_lifecycle": {},
   "time_check_urls": [
     "https://www.microsoft.com",
     "https://www.qq.com",
     "https://www.baidu.com"
   ],
   "reconnect_seconds": 5,
+  "heartbeat_seconds": 15,
+  "excel_batch_seconds": 0.5,
+  "excel_full_refresh_seconds": 60,
   "rebuild_on_start": true
 }

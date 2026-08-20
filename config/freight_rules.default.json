@@ -18,6 +18,14 @@
     "临沂": ["临沂", "兰山", "罗庄", "河东", "郯城", "兰陵", "沂水", "沂南", "平邑", "费县", "蒙阴", "莒南", "临沭"]
   },
   "board_types": ["大板", "红板", "拼板"],
+  "default_cargo_subcategory": "大板",
+  "default_cargo_category": "板材",
+  "cargo_types": [
+    {"name": "大板", "aliases": ["大板"], "category": ""},
+    {"name": "红板", "aliases": ["红板"], "category": ""},
+    {"name": "拼板", "aliases": ["拼板"], "category": ""}
+  ],
+  "cargo_route_scopes": [],
   "price_threshold": 1000,
   "invalid_line_keywords": ["不要标价", "有车了", "求车", "找车", "联系", "有车联系"],
   "relative_date_aliases": {

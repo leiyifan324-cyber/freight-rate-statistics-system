@@ -38,20 +38,22 @@ Source: "{#SourceDir}\qq_live_config.json"; DestDir: "{app}"; Flags: onlyifdoesn
 Source: "{#SourceDir}\freight_rules.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
-Name: "{group}\启动物流运价系统"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode supervisor"
-Name: "{group}\群与线路管理"; Filename: "http://127.0.0.1:8765/?view=config"
+Name: "{group}\启动物流运价系统"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode start"
+Name: "{group}\群与线路管理"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode open-dashboard"
 Name: "{group}\手动文本统计"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode manual"
+Name: "{group}\安装或更新NapCatQQ"; Filename: "{app}\安装NapCatQQ.bat"
 Name: "{group}\使用说明"; Filename: "{app}\docs\03-正常使用.md"
-Name: "{autodesktop}\物流运价系统管理"; Filename: "http://127.0.0.1:8765/?view=config"; Tasks: desktopicon
+Name: "{autodesktop}\物流运价系统管理"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode open-dashboard"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面管理入口"; GroupDescription: "快捷方式："; Flags: checkedonce
 Name: "autostart"; Description: "登录 Windows 后自动启动统计系统"; GroupDescription: "自动运行："; Flags: checkedonce
+Name: "installnapcat"; Description: "安装内置NapCatQQ组件（不包含QQ）"; GroupDescription: "消息接入："; Flags: checkedonce
 
 [Run]
 Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode install-autostart"; Tasks: autostart; Flags: runhidden waituntilterminated
-Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode supervisor"; Flags: nowait runhidden postinstall skipifsilent; Description: "启动物流运价统计系统"
-Filename: "http://127.0.0.1:8765/?view=config"; Flags: shellexec nowait postinstall skipifsilent; Description: "打开首次配置页面"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\安装NapCatQQ.ps1"""; Tasks: installnapcat; Flags: postinstall skipifsilent; Description: "安装NapCatQQ组件（不包含QQ）"
+Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode start"; Flags: nowait postinstall skipifsilent; Description: "启动物流运价统计系统并打开管理页面"
 
 [UninstallRun]
 Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode uninstall-autostart"; RunOnceId: "RemoveAutostart"; Flags: runhidden waituntilterminated

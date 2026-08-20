@@ -13,4 +13,4 @@
 | PyInstaller | Windows打包 | [GPL-2.0 with exception](https://pyinstaller.org/en/stable/license.html) |
 | Inno Setup简体中文翻译 | 安装界面本地化 | [MIT](https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation) |
 
-NapCatQQ不是本项目发行包的一部分。它由NapNeko/NapCatQQ独立提供，采用 [Limited Redistribution License](https://github.com/NapNeko/NapCatQQ/blob/main/LICENSE)，并包含非商业使用限制。用户需自行从其[官方Release](https://github.com/NapNeko/NapCatQQ/releases/latest)获取并遵守相关条款。
+本项目Release原样包含NapNeko/NapCatQQ官方发布的 `NapCat.Shell.Windows.Node.zip`，不包含腾讯QQ。具体锁定版本、官方来源和SHA-256见发行包 `third_party/NapCatQQ`。NapCatQQ采用 [Limited Redistribution License](https://github.com/NapNeko/NapCatQQ/blob/main/LICENSE)，并包含非商业使用限制；完整许可文本与版权信息随包提供。商业使用前必须取得NapCat作者额外授权。

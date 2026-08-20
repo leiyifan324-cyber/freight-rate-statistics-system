@@ -6,6 +6,7 @@ __pycache__/
 build/
 dist/
 dist-release/
+.release-cache/
 *.spec
 *.log
 data/
@@ -21,3 +22,8 @@ qq_chat.txt
 系统状态.json
 .qq_live_state.json
 NapCatQQ/
+task_plan.md
+notes.md
+系统全量验证报告.md
+发布检查与部署报告.md
+小类统计改动报告.md

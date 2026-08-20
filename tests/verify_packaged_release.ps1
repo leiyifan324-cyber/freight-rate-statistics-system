@@ -13,11 +13,40 @@ $appDir = [IO.Path]::GetFullPath($AppDir)
 $testRoot = [IO.Path]::GetFullPath($TestRoot)
 $executable = Join-Path $appDir "FreightQuoteSystem.exe"
 $rulesFile = Join-Path $appDir "freight_rules.json"
+$napcatRoot = Join-Path $appDir "third_party\NapCatQQ"
+$napcatManifestPath = Join-Path $napcatRoot "napcat-shell-windows-node.json"
+$napcatLicensePath = Join-Path $napcatRoot "NAPCAT_LICENSE.txt"
+$napcatInstallerPath = Join-Path $appDir "安装NapCatQQ.ps1"
 if (-not (Test-Path -LiteralPath $executable)) {
     throw "Packaged executable was not found: $executable"
 }
 if (-not (Test-Path -LiteralPath $rulesFile)) {
     throw "Packaged rules file was not found: $rulesFile"
+}
+foreach ($requiredPath in @($napcatManifestPath, $napcatLicensePath, $napcatInstallerPath)) {
+    if (-not (Test-Path -LiteralPath $requiredPath)) {
+        throw "Packaged NapCatQQ component was not found: $requiredPath"
+    }
+}
+$napcatManifest = Get-Content -LiteralPath $napcatManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$napcatArchivePath = Join-Path $napcatRoot ([string]$napcatManifest.asset_name)
+if (-not (Test-Path -LiteralPath $napcatArchivePath)) {
+    throw "Packaged NapCatQQ archive was not found: $napcatArchivePath"
+}
+$napcatHash = (Get-FileHash -LiteralPath $napcatArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($napcatHash -ne ([string]$napcatManifest.sha256).ToLowerInvariant()) {
+    throw "Packaged NapCatQQ archive hash does not match its manifest."
+}
+
+$napcatInstallRoot = Join-Path $testRoot "NapCatQQ"
+& $napcatInstallerPath -InstallRoot $napcatInstallRoot -DoNotStart
+$stableNapcatLauncher = Join-Path $napcatInstallRoot "Start-NapCat.cmd"
+$versionedNapcatLauncher = Join-Path $napcatInstallRoot "$($napcatManifest.version)\napcat\launcher.bat"
+if (-not (Test-Path -LiteralPath $stableNapcatLauncher) -or -not (Test-Path -LiteralPath $versionedNapcatLauncher)) {
+    throw "NapCatQQ installer did not produce the expected launchers."
+}
+if (Get-ChildItem -LiteralPath $napcatInstallRoot -Recurse -File -Filter "QQ.exe" -ErrorAction SilentlyContinue) {
+    throw "NapCatQQ installation unexpectedly contains QQ.exe."
 }
 
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
@@ -84,6 +113,9 @@ try {
         Port = $Port
         GroupCount = @($managerConfig.groups).Count
         ProcessId = $process.Id
+        NapCatVersion = $napcatManifest.version
+        NapCatIncludesQQ = $napcatManifest.contains_qq
+        NapCatInstallVerified = $true
     } | Format-Table -AutoSize
 }
 finally {
