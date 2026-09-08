@@ -1,6 +1,8 @@
 name: Verify published Windows release
 
 on:
+  push:
+    branches: [release-verify/v1.4.2]
   workflow_dispatch:
     inputs:
       tag:
@@ -21,11 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.tag || 'v1.4.2' }}
       - name: Download published assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.tag || 'v1.4.2' }}
         shell: powershell
         run: |
           gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir release-download

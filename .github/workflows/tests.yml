@@ -2,6 +2,7 @@ name: tests
 
 on:
   push:
+    branches-ignore: [release-verify/**]
   pull_request:
 
 jobs:
