@@ -1919,6 +1919,16 @@ def start_status_dashboard(
 ) -> ThreadingHTTPServer | None:
     csrf_token = secrets.token_urlsafe(32)
 
+    class DashboardHTTPServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # Windows SO_REUSEADDR permits two processes to bind one port.
+            # Use exclusive ownership so another service cannot be mistaken
+            # for this dashboard; retain normal Unix restart semantics.
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                self.allow_reuse_address = False
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
     class Handler(BaseHTTPRequestHandler):
         def send_security_headers(self) -> None:
             self.send_header("Cache-Control", "no-store")
@@ -2174,8 +2184,9 @@ def start_status_dashboard(
         validated_port = int(port)
         if not 0 <= validated_port <= 65535:
             raise ValueError("管理页面端口必须在1到65535之间。")
-        server = ThreadingHTTPServer((validated_host, validated_port), Handler)
+        server = DashboardHTTPServer((validated_host, validated_port), Handler)
     except (OSError, OverflowError, TypeError, ValueError) as exc:
+        status.add_error(f"状态面板启动失败: {exc}")
         if logger:
             logger.warning("状态面板启动失败: %s", exc)
         return None
