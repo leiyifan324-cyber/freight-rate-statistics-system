@@ -76,16 +76,18 @@ def main():
         ingestor = freight.OneBotFreightIngestor(profiles)
         event = make_event(
             "real-mixed-1",
-            "【报价】南宁→佛山南海 大板 235元/方\n"
+            "【报价】南宁→佛山南海 大板 235元/吨\n"
+            "南宁到佛山南海 大板 40元/方\n"
             "南宁到黄冈武穴大板160\n"
             "南宁到佛山大板",
         )
         result = ingestor.ingest(event)
         assert result["status"] == "added", result
         assert result["inserted_count"] == 1, result
-        assert result["received_line_count"] == 3, result
-        assert result["rejected_line_count"] == 2, result
-        assert "另有 2 行未识别" in result["reason"], result
+        assert result["received_line_count"] == 4, result
+        assert result["rejected_line_count"] == 3, result
+        assert "另有 3 行未识别" in result["reason"], result
+        assert any("按方" in value for value in result["rejected_reasons"])
         assert any("目的地不在范围内" in value for value in result["rejected_reasons"])
         assert "未识别到有效价格" in result["rejected_reasons"]
 
@@ -111,7 +113,7 @@ def main():
         assert snapshot["last_event_reason"] == result["reason"]
         assert snapshot["groups"]["123456789"]["last_event_reason"] == result["reason"]
         assert snapshot["groups"]["123456789"]["active_records"] == 1
-        assert snapshot["groups"]["123456789"]["rejected_records"] == 2
+        assert snapshot["groups"]["123456789"]["rejected_records"] == 3
 
     with open(RULES_PATH, "rb") as stream:
         assert stream.read() == rules_before

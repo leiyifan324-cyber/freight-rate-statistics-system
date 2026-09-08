@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import json
+import math
 import hashlib
 import argparse
 import calendar
@@ -31,6 +32,7 @@ from freight_runtime import (
     create_daily_backup,
     normalize_data_lifecycle_config,
     normalize_group_data_lifecycle_configs,
+    normalize_excluded_origins,
     prune_daily_backups,
     start_status_dashboard,
     validate_dashboard_host,
@@ -39,7 +41,15 @@ from freight_runtime import (
 )
 
 
-QQ_OUTPUT_BUILD_LOCK = threading.Lock()
+QQ_OUTPUT_BUILD_LOCK = threading.RLock()
+_GROUP_OUTPUT_LOCKS: dict[str, threading.RLock] = {}
+_GROUP_OUTPUT_LOCKS_GUARD = threading.Lock()
+
+
+def group_output_lock(profile: dict):
+    key = os.path.abspath(profile["output_dir"])
+    with _GROUP_OUTPUT_LOCKS_GUARD:
+        return _GROUP_OUTPUT_LOCKS.setdefault(key, threading.RLock())
 
 # =========================
 # 1. 配置区
@@ -203,8 +213,10 @@ def debug(msg):
 def normalize_text(text: str) -> str:
     text = text.strip()
     text = text.replace("　", " ")
+    text = text.translate(str.maketrans("０１２３４５６７８９／．－", "0123456789/.-"))
     text = text.replace("→", "到").replace("->", "到")
-    text = text.replace("～", "-")
+    text = re.sub(r"(?<=\d)\s*[～~—–]\s*(?=\d)", "-", text)
+    text = re.sub(r"(?<=\d)\s*([/-])\s*(?=\d)", r"\1", text)
     text = re.sub(r"\s+", " ", text)
     return text
 
@@ -309,7 +321,8 @@ EXPLICIT_CHINESE_DATE_PATTERN = re.compile(
     r"(?:(?P<year>\d{4})年)?(?P<month>\d{1,2})月(?P<day>\d{1,2})日?"
 )
 EXPLICIT_SLASH_DATE_PATTERN = re.compile(
-    r"(?:(?P<year>\d{4})[-/])?(?P<month>\d{1,2})[-/](?P<day>\d{1,2})"
+    r"(?<![\d./-])(?:(?P<year>\d{4})[-/])?"
+    r"(?P<month>\d{1,2})[-/](?P<day>\d{1,2})(?![\d./-])"
 )
 WEEKDAY_PATTERN = re.compile(
     r"(?P<prefix>下周|下星期|下礼拜|本周|本星期|本礼拜|周|星期|礼拜)"
@@ -505,9 +518,17 @@ def expand_relative_freight_dates(line: str, base_date_text: str) -> list[tuple[
         ]
 
     for pattern in (EXPLICIT_CHINESE_DATE_PATTERN, EXPLICIT_SLASH_DATE_PATTERN):
-        match = pattern.search(normalized_line)
-        if not match:
+        matches = list(pattern.finditer(normalized_line))
+        if pattern is EXPLICIT_SLASH_DATE_PATTERN:
+            # 裸月/日仅在行首或明确装货日期上下文识别；不能把车长或报价当日期。
+            matches = [m for m in matches if m.group("year") or (
+                m.start() == 0
+                or re.search(r"(?:日期|装货|发货)[:： ]*$", normalized_line[:m.start()])
+                or re.match(r"\s*(?:日|号|装货|发货|装车)", normalized_line[m.end():])
+            )]
+        if not matches:
             continue
+        match = matches[0]
         try:
             explicit_date = date(
                 int(match.group("year") or base_date.year),
@@ -520,6 +541,10 @@ def expand_relative_freight_dates(line: str, base_date_text: str) -> list[tuple[
             normalized_line[:match.start()] + " " + normalized_line[match.end():]
         )
         return [(explicit_date.isoformat(), freight_text)]
+
+    # 只有“22号”时无法可靠确定月份，不要默默记到消息当天。
+    if re.search(r"(?<!\d)\d{1,2}号", normalized_line):
+        return []
 
     weekday_match = WEEKDAY_PATTERN.search(normalized_line)
     if weekday_match:
@@ -594,7 +619,9 @@ def extract_route(line: str, default_origin: str = DEFAULT_ORIGIN):
 
     if "到" in text:
         left, right = text.split("到", 1)
-        origin = normalize_origin(left)
+        # Only an absent origin may inherit the group's default. An explicitly
+        # supplied out-of-scope origin must still be rejected, never reclassified.
+        origin = normalize_origin(left) if left.strip() else normalize_origin(default_origin)
         if not origin:
             return None, f"始发地不在范围内: {left.strip()}"
         rest_all = right.strip()
@@ -657,16 +684,39 @@ def is_vehicle_size_number(num_str: str) -> bool:
     except ValueError:
         return False
 
-    vehicle_sizes = [13, 13.5, 13.75, 14, 16, 17.5]
+    vehicle_sizes = [9.6, 13, 13.5, 13.75, 14, 16, 17.5]
     return any(abs(val - x) < 0.01 for x in vehicle_sizes)
 
 
-def parse_price_text(price_text: str):
-    nums = re.findall(r"\d+(?:\.\d+)?", price_text)
-    if not nums:
-        return None
+def quote_rejection_reason(text: str) -> str:
+    """Check the complete line before route/price extraction can discard context."""
+    text = normalize_text(text)
+    volume_unit = r"(?:立方米?|方|m\s*(?:\^?\s*3|³)|㎥|cbm)"
+    volume_pricing = (
+        rf"(?:/\s*{volume_unit}|每\s*{volume_unit}"
+        rf"|(?:元|块)\s*(?:一\s*)?{volume_unit}"
+        rf"|一\s*{volume_unit}\s*[:：]?\s*\d"
+        rf"|\d\s*一\s*{volume_unit}|按\s*{volume_unit}"
+        r"|(?<!木)(?:立方|方)价)"
+    )
+    if re.search(volume_pricing, text, flags=re.IGNORECASE):
+        return "按方/立方米计价的运价不采集"
+    # A hyphen between positive numbers is a range, not a unary minus.
+    # normalize_text has already joined valid ranges such as "120 - 125".
+    if re.search(r"(?<![\d.])[-−﹣—–]\s*\d|负\s*\d", text):
+        return "报价含负数或疑似负价，拒绝采集，请核实后重新发布"
+    return ""
 
+
+def parse_price_text(price_text: str):
+    price_text = normalize_text(price_text)
+    # Never recover unsigned fragments from malformed/negative price tokens.
+    if not re.fullmatch(r"\d+(?:\.\d+)?(?:[/-]\d+(?:\.\d+)?)*", price_text):
+        return None
+    nums = re.findall(r"\d+(?:\.\d+)?", price_text)
     values = [float(x) for x in nums]
+    if not all(math.isfinite(value) and value > 0 for value in values):
+        return None
     return {
         "price_text": price_text,
         "price_min": round(min(values), DECIMAL_PLACES),
@@ -675,7 +725,7 @@ def parse_price_text(price_text: str):
     }
 
 
-def extract_price(rest: str):
+def extract_price_with_reason(rest: str):
     """
     支持：
     118
@@ -684,31 +734,50 @@ def extract_price(rest: str):
     3400/3450
     过滤 13.75 / 17.5 等车型长度
     """
-    text = re.sub(r"1\d{10}", " ", rest)
+    text = normalize_text(rest)
+    rejection = quote_rejection_reason(text)
+    if rejection:
+        return None, rejection
+    text = re.sub(r"(?<!\d)\d{7,}(?!\d)", " ", text)
+    if re.search(r"\d\s*(?:加|另加|另收|另付)\s*\d", text):
+        return None, "价格含加价说明，需人工确认最终运价"
 
     candidates = []
+    unexplained_numbers = []
     pattern = r"\d+(?:\.\d+)?(?:[/-]\d+(?:\.\d+)?)*"
     for m in re.finditer(pattern, text):
         token = m.group()
         nums = re.findall(r"\d+(?:\.\d+)?", token)
 
-        if nums and all(is_vehicle_size_number(x) for x in nums):
+        # “元/吨”“一吨”是价格单位；紧跟数字的“吨、米、装、卸”等是货量/车长。
+        suffix = text[m.end():].lstrip()
+        prefix = text[:m.start()].rstrip()
+        if re.match(r"(?:吨(?!位|包)|公斤|千克|公里|千米|米|方|立方|装|卸|车(?!长|型)|趟|排|件|包|张|号|天|小时)", suffix):
+            continue
+        if re.search(r"(?:(?<![大有])吨位|重量|车长|距离|装卸费|信息费|定金)\s*[:：]?\s*$", prefix):
             continue
 
-        candidates.append((m.start(), token))
+        if (nums and all(is_vehicle_size_number(x) for x in nums)
+                and not re.match(r"(?:元|块|一吨|/\s*吨)", suffix)):
+            continue
+
+        parsed = parse_price_text(token)
+        if parsed and parsed["price_avg"] >= 20:
+            candidates.append(parsed)
+        else:
+            unexplained_numbers.append(token)
 
     if not candidates:
-        return None
+        return None, "未识别到有效价格"
+    if unexplained_numbers:
+        return None, "存在未说明用途的数字或疑似拆分价格，需人工确认"
+    if len({item["price_text"] for item in candidates}) > 1:
+        return None, "存在多个未标明关系的价格数字，需人工确认"
+    return candidates[0], ""
 
-    for _, token in reversed(candidates):
-        parsed = parse_price_text(token)
-        if not parsed:
-            continue
-        if parsed["price_avg"] < 20:
-            continue
-        return parsed
 
-    return None
+def extract_price(rest: str):
+    return extract_price_with_reason(rest)[0]
 
 
 # =========================
@@ -726,6 +795,10 @@ def format_freight_line_with_reason(
     if not line:
         return None, "消息行为空"
 
+    rejection = quote_rejection_reason(line)
+    if rejection:
+        return None, rejection
+
     invalid_keyword = next(
         (keyword for keyword in INVALID_LINE_KEYWORDS if keyword in line),
         "",
@@ -738,11 +811,13 @@ def format_freight_line_with_reason(
         return None, err or "未识别到有效线路"
 
     origin, dest_raw, _dest_city, rest = route
-    price_info = extract_price(rest)
+    price_info, price_reason = extract_price_with_reason(rest)
     if not price_info:
-        return None, "未识别到有效价格"
+        return None, price_reason
 
     cargo = extract_cargo(rest)
+    if cargo is None and "到" in line:
+        cargo = extract_cargo(line.split("到", 1)[0])
     if cargo is None:
         cargo = DEFAULT_CARGO_SUBCATEGORY
 
@@ -841,6 +916,8 @@ def parse_freight_line(
     current_sender: str,
     default_origin: str = DEFAULT_ORIGIN
 ):
+    if quote_rejection_reason(line):
+        return None
     if is_invalid_line(line):
         return None
 
@@ -2190,6 +2267,15 @@ def write_small_category_outputs(
 
     current_spring_year = spring_festival_year_for_date(as_of_date)
     history_years = set()
+    # Existing generated archives must also be regenerated when their last quote is deleted.
+    for subcategory in cargo_names:
+        archive_root = os.path.join(resolve_small_category_output_dir(cargo_category(subcategory), subcategory),
+                                    SMALL_CATEGORY_ARCHIVE_FOLDER)
+        if os.path.isdir(archive_root):
+            for name in os.listdir(archive_root):
+                match = re.fullmatch(r"(\d{4})春节年度", name)
+                if match and os.path.isfile(os.path.join(archive_root, name, SMALL_CATEGORY_ARCHIVE_STATE)):
+                    history_years.add(int(match.group(1)))
     if history_df is not None and not history_df.empty:
         for value in pd.to_datetime(history_df["日期"], errors="coerce").dropna():
             history_years.add(spring_festival_year_for_date(value.date()))
@@ -2237,8 +2323,6 @@ def write_small_category_outputs(
                 spring_year,
                 period_end,
             )
-            if year_daily.empty:
-                continue
             category = cargo_category(subcategory)
             base_dir = resolve_small_category_output_dir(category, subcategory)
             archive_dir = os.path.join(
@@ -2246,6 +2330,8 @@ def write_small_category_outputs(
                 SMALL_CATEGORY_ARCHIVE_FOLDER,
                 year_label,
             )
+            if year_daily.empty and not os.path.isdir(archive_dir):
+                continue
             os.makedirs(archive_dir, exist_ok=True)
             safe_subcategory = safe_statistics_component(
                 subcategory,
@@ -2506,6 +2592,14 @@ def ensure_large_category_archives(
         if spring_year is not None and spring_year < current_spring_year:
             records_by_year[spring_year].append(record)
 
+    if os.path.isdir(BUSINESS_ARCHIVE_FOLDER):
+        for name in os.listdir(BUSINESS_ARCHIVE_FOLDER):
+            match = re.fullmatch(r"(\d{4})春节年度", name)
+            if match and int(match.group(1)) < current_spring_year and os.path.isfile(os.path.join(
+                BUSINESS_ARCHIVE_FOLDER, name, LARGE_CATEGORY_ARCHIVE_FOLDER, LARGE_CATEGORY_ARCHIVE_STATE
+            )):
+                records_by_year.setdefault(int(match.group(1)), [])
+
     summary = {
         "archived_years": [],
         "skipped_years": [],
@@ -2749,6 +2843,19 @@ def load_qq_live_config(config_path: str, require_group_ids: bool = True) -> dic
             raise ValueError(f"群 {group_id} 的默认始发地不在支持范围内: {raw_origin}")
         group_default_origins[group_id] = normalized_origin
 
+    raw_exclusions = config.get("group_excluded_origins", {})
+    if not isinstance(raw_exclusions, dict):
+        raise ValueError("group_excluded_origins 必须是以群号为键、标准始发地列表为值的对象。")
+    if set(raw_exclusions) - group_ids:
+        raise ValueError("group_excluded_origins 引用了未配置的QQ群。")
+    group_excluded_origins = {}
+    for group_id, values in raw_exclusions.items():
+        blocked = normalize_excluded_origins(
+            values, set(ORIGIN_GROUPS), group_default_origins[group_id], group_id,
+        )
+        if blocked:
+            group_excluded_origins[group_id] = blocked
+
     output_root = str(config.get("output_root", "QQ实时统计结果")).strip()
     if not output_root:
         raise ValueError("output_root 不能为空。")
@@ -2804,6 +2911,7 @@ def load_qq_live_config(config_path: str, require_group_ids: bool = True) -> dic
         "group_ids": group_ids,
         "group_names": group_names,
         "group_default_origins": group_default_origins,
+        "group_excluded_origins": group_excluded_origins,
         "output_root": output_root,
         "rules_file": rules_file,
         "accept_self_messages": bool(config.get("accept_self_messages", False)),
@@ -2908,11 +3016,13 @@ def build_qq_group_profiles(config: dict) -> dict[str, dict]:
             "group_id": group_id,
             "group_name": group_name,
             "default_origin": config["group_default_origins"][group_id],
+            "excluded_origins": list(config.get("group_excluded_origins", {}).get(group_id, [])),
             "output_dir": output_dir,
             "output_dir_note": output_dir_note,
             "input_file": os.path.join(output_dir, INPUT_FILE),
             "state_file": os.path.join(output_dir, QQ_LIVE_STATE_FILE),
             "database_file": os.path.join(output_dir, DATABASE_FILE),
+            "archive_database": os.path.abspath(os.path.join(config['output_root'], '统计年度管理.db')),
             "rejected_file": os.path.join(output_dir, REJECTED_CSV),
             "backup_retention_days": int(config.get("backup_retention_days", 30)),
             "backup_enabled": "backup_retention_days" in config,
@@ -2936,9 +3046,17 @@ def build_qq_group_profiles(config: dict) -> dict[str, dict]:
 def initialize_group_database(profile: dict) -> FreightDatabase:
     """首次升级时把已有TXT解析结果迁移进SQLite；之后只做增量写入。"""
     database = FreightDatabase(profile["database_file"])
+    with database.session() as connection:
+        initialized = connection.execute("SELECT value FROM metadata WHERE key='txt_migration_done'").fetchone()
+    if initialized:
+        return database
     if database.count_records() > 0:
+        with database.session() as connection:
+            connection.execute("INSERT OR REPLACE INTO metadata VALUES ('txt_migration_done','1')")
         return database
     if not os.path.exists(profile["input_file"]) or os.path.getsize(profile["input_file"]) == 0:
+        with database.session() as connection:
+            connection.execute("INSERT OR REPLACE INTO metadata VALUES ('txt_migration_done','1')")
         return database
 
     previous_directory = os.getcwd()
@@ -2957,6 +3075,8 @@ def initialize_group_database(profile: dict) -> FreightDatabase:
             for record in records
         ]
         database.insert_records(keyed_records, source="txt_migration")
+        with database.session() as connection:
+            connection.execute("INSERT OR REPLACE INTO metadata VALUES ('txt_migration_done','1')")
     finally:
         os.chdir(previous_directory)
     return database
@@ -2966,19 +3086,40 @@ def _rebuild_qq_group_output_unlocked(profile: dict) -> dict:
     """在目标群目录中运行原有统计流程，并保证结束后恢复工作目录。"""
     output_dir = profile["output_dir"]
     os.makedirs(output_dir, exist_ok=True)
-    initialize_group_database(profile)
+    database = initialize_group_database(profile)
+    with database.session() as connection:
+        dirty = connection.execute("SELECT value FROM metadata WHERE key='reports_dirty'").fetchone()
     previous_directory = os.getcwd()
     try:
         os.chdir(output_dir)
-        summary = rebuild_all(
-            profile["default_origin"],
-            database_file=profile["database_file"],
-            history_retention_days=profile.get("data_lifecycle", {}).get(
-                "freight_record_retention_days", 0
-            ),
-        )
+        from freight_archive import read_year, rebuild_manual
+        if read_year(profile.get('archive_database'))['mode']=='manual':
+            summary = rebuild_manual(profile)
+        else:
+            summary = rebuild_all(
+                profile["default_origin"],
+                database_file=profile["database_file"],
+                history_retention_days=profile.get("data_lifecycle", {}).get(
+                    "freight_record_retention_days", 0
+                ),
+            )
     finally:
         os.chdir(previous_directory)
+    complete = (summary.get("excel_updated", True)
+                and not summary.get("large_category_archives", {}).get("pending_years")
+                and not summary.get("small_category_outputs", {}).get("daily_excel_pending_count")
+                and not summary.get("small_category_outputs", {}).get("archive_pending_count"))
+    if dirty and complete:
+        check_dir = os.path.join(output_dir,'手动年度统计','当前') if summary.get('manual_year') else output_dir
+        for root, directories, files in os.walk(check_dir):
+            directories[:] = [name for name in directories if name not in {"备份", "logs"}]
+            if any("待更新" in name and name.lower().endswith((".csv", ".xlsx")) for name in files):
+                complete = False
+                break
+    if dirty and complete:
+        with database.session() as connection:
+            connection.execute("DELETE FROM metadata WHERE key='reports_dirty' AND value=?", (dirty["value"],))
+    summary["report_pending"] = bool(dirty and not complete)
     if profile.get("backup_enabled"):
         create_daily_backup(
             output_dir,
@@ -2998,7 +3139,7 @@ def _rebuild_qq_group_output_unlocked(profile: dict) -> dict:
 
 def rebuild_qq_group_output(profile: dict) -> dict:
     """全量构建会改变进程工作目录，因此跨群也必须受全局锁保护。"""
-    with QQ_OUTPUT_BUILD_LOCK:
+    with group_output_lock(profile), QQ_OUTPUT_BUILD_LOCK:
         return _rebuild_qq_group_output_unlocked(profile)
 
 
@@ -3028,6 +3169,23 @@ def _append_detail_csv(path: str, records: list[dict]) -> bool:
 
 
 def append_qq_group_excel_records(profile: dict, records: list[dict]) -> dict:
+    # A deleted quote can still be present in an older queued append batch.
+    with group_output_lock(profile):
+        from freight_archive import read_year
+        if read_year(profile.get('archive_database'))['mode']=='manual':
+            # Year boundaries cannot use the legacy Spring-Festival append routing.
+            with QQ_OUTPUT_BUILD_LOCK:
+                return _rebuild_qq_group_output_unlocked(profile)
+        database = FreightDatabase(profile["database_file"])
+        with database.session() as connection:
+            deleted_keys = {row[0] for row in connection.execute(
+                "SELECT record_id FROM deleted_data WHERE kind='freight'")}
+        records = [record for record in records
+                   if build_record_content_dedup_key(record) not in deleted_keys]
+        return _append_qq_group_excel_records_unlocked(profile, records)
+
+
+def _append_qq_group_excel_records_unlocked(profile: dict, records: list[dict]) -> dict:
     """把新入库记录追加到明细/待生效表；统计汇总由低频全量刷新完成。"""
     allowed_records = []
     for record in records:
@@ -3407,7 +3565,8 @@ class OneBotFreightIngestor:
         image_sources = extract_onebot_image_sources(event)
         ocr_texts = []
         ocr_errors = []
-        if image_sources and self.ocr:
+        ocr_active = bool(self.ocr and self.ocr.enabled)
+        if image_sources and ocr_active:
             for source in image_sources:
                 text, error = self.ocr.recognize(source)
                 if text:
@@ -3423,6 +3582,12 @@ class OneBotFreightIngestor:
                 "event_type": event_type,
                 "group_id": group_id,
             }
+
+        if image_sources and not combined_text and not ocr_active:
+            database.mark_processed_message(message_key)
+            return {"status": "ignored", "reason": "仅采集文字，图片消息已跳过",
+                    "event_type": event_type, "group_id": group_id,
+                    "group_name": profile["group_name"], "sender": sender}
 
         for source, error in ocr_errors:
             self._record_rejection(
@@ -3456,10 +3621,13 @@ class OneBotFreightIngestor:
             received_line_count += 1
             line_records = []
             line_reasons = []
-            for effective_date, freight_text in expand_relative_freight_dates(
+            expanded_dates = expand_relative_freight_dates(
                 line,
                 message_time.date().isoformat(),
-            ):
+            )
+            if not expanded_dates:
+                line_reasons.append("日期无效或不明确，请使用完整年月日或明天/后天")
+            for effective_date, freight_text in expanded_dates:
                 formatted, format_reason = format_freight_line_with_reason(
                     freight_text,
                     profile["default_origin"],
@@ -3476,6 +3644,11 @@ class OneBotFreightIngestor:
                 )
                 if record:
                     record = normalize_record_cargo(record)
+                    # Check the parsed canonical origin, after aliases/default fallback.
+                    # Ingestion only: changing this setting never deletes/relabels history.
+                    if record["始发地"] in profile.get("excluded_origins", []):
+                        line_reasons.append(f"本群不统计始发地为{record['始发地']}的运价（群始发地过滤）")
+                        continue
                     allowed, scope_reason = validate_cargo_route(record)
                     if allowed:
                         line_records.append(record)
@@ -3774,6 +3947,8 @@ class ExcelRebuildCoordinator:
                         timer = self._full_timers.pop(group_id, None)
                         if timer:
                             timer.cancel()
+                    if summary.get("report_pending"):
+                        self._schedule_full_refresh(group_id)
                 else:
                     summary = self.incremental_callback(
                         self.group_profiles[group_id],
@@ -4045,12 +4220,14 @@ class GroupMessageProcessor:
         runtime_status: RuntimeStatus,
         result_callback=None,
         logger=None,
+        collection_control=None,
     ) -> None:
         self.group_profiles = group_profiles
         self.ingestor = ingestor
         self.runtime_status = runtime_status
         self.result_callback = result_callback
         self.logger = logger
+        self.collection_control = collection_control
         self._queues = {
             group_id: queue.Queue(maxsize=1)
             for group_id in group_profiles
@@ -4101,6 +4278,11 @@ class GroupMessageProcessor:
             pass
 
     def submit(self, event: object) -> dict:
+        if self.collection_control is not None:
+            return self.collection_control.submit(event, lambda: self._submit_admitted(event))
+        return self._submit_admitted(event)
+
+    def _submit_admitted(self, event: object) -> dict:
         event_data = event if isinstance(event, dict) else {}
         group_id = str(event_data.get("group_id", "")).strip()
         target_queue = self._queues.get(group_id)
@@ -4402,6 +4584,8 @@ def _run_qq_live_session(config_path: str) -> bool:
                 pass
 
     dashboard_server = None
+    from freight_data import FreightDataService
+    data_service = FreightDataService(group_profiles, runtime_status)
     if config["dashboard_enabled"]:
         configuration_manager = FreightConfigurationManager(
             config["config_path"],
@@ -4422,6 +4606,7 @@ def _run_qq_live_session(config_path: str) -> bool:
                 group_profiles,
                 limit,
             ),
+            data_service=data_service,
         )
     if not config["group_ids"]:
         runtime_status.update(connection="setup_required")
@@ -4457,6 +4642,8 @@ def _run_qq_live_session(config_path: str) -> bool:
         batch_delay_seconds=config["excel_batch_seconds"],
         full_refresh_seconds=config["excel_full_refresh_seconds"],
     )
+    data_service.refresh_callback = excel_coordinator.request
+    data_service.archive.resume()
 
     def handle_processed_event(_event: object, result: dict) -> None:
         if result["status"] in {"ignored", "duplicate"}:
@@ -4488,6 +4675,10 @@ def _run_qq_live_session(config_path: str) -> bool:
         runtime_status,
         result_callback=handle_processed_event,
         logger=LOGGER,
+        collection_control=data_service.collection,
+    )
+    data_service.collection.pending_count = lambda: sum(
+        database.count_pending_inbound_events() for database in message_processor._databases.values()
     )
 
     print("QQ 实时提取已启动")
@@ -4510,7 +4701,8 @@ def _run_qq_live_session(config_path: str) -> bool:
             f"- {profile['group_name']} ({profile['group_id']}) -> "
             f"{profile['output_dir']}，默认始发地: {profile['default_origin']}"
         )
-    print("支持文字和Windows图片OCR；未识别消息会单独保存；按 Ctrl+C 停止。")
+    print(("支持文字和Windows图片OCR" if ocr.enabled else "仅采集文字，图片已跳过")
+          + "；未识别文字会单独保存；按 Ctrl+C 停止。")
 
     if config["rebuild_on_start"]:
         for profile in group_profiles.values():
@@ -4525,6 +4717,11 @@ def _run_qq_live_session(config_path: str) -> bool:
                 output_dir=profile["output_dir"],
                 **summary,
             )
+
+    # Resume unfinished report updates after a deletion even when startup rebuild is disabled.
+    for group_id in group_profiles:
+        if data_service.report_state(group_id)["pending"]:
+            excel_coordinator.request(group_id, force_full=True)
 
     lifecycle_manager = DataLifecycleManager(
         group_profiles,
@@ -4643,6 +4840,8 @@ def _run_qq_live_session(config_path: str) -> bool:
     if not lifecycle_manager.stop(timeout=30):
         runtime_status.update(connection="restart_failed")
         raise RuntimeError("数据生命周期线程无法安全停止，已中止热重载。")
+    if not data_service.daily.wait_idle(timeout=30):
+        raise RuntimeError('每日图表仍在生成，不能安全重新加载程序。')
     message_stopped = message_processor.stop(drain=True, timeout=60)
     if not message_stopped:
         runtime_status.update(

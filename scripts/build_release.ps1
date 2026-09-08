@@ -105,6 +105,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "config\qq_live_config.example.json"
 Copy-Item -LiteralPath (Join-Path $repoRoot "config\freight_rules.default.json") -Destination (Join-Path $staging "freight_rules.json")
 Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\windows_ocr.ps1") -Destination (Join-Path $staging "windows_ocr.ps1")
 Copy-Item -LiteralPath (Join-Path $repoRoot "README.md"),(Join-Path $repoRoot "LICENSE"),(Join-Path $repoRoot "THIRD_PARTY_NOTICES.md"),(Join-Path $repoRoot "CHANGELOG.md") -Destination $staging
+Copy-Item -LiteralPath (Join-Path $repoRoot "VERSION") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs") -Destination (Join-Path $staging "docs") -Recurse
 Copy-Item -Path (Join-Path $repoRoot "installer\assets\*") -Destination $staging
 Convert-BatchFilesToWindowsFormat $staging
@@ -131,7 +132,10 @@ finally {
     $napcatArchive.Dispose()
 }
 
-$packageTestRoot = Join-Path $buildRoot "packaged-smoke-test"
+& $Python (Join-Path $PSScriptRoot "release_manifest.py") --app-dir $staging
+if ($LASTEXITCODE -ne 0) { throw "Release manifest failed" }
+
+$packageTestRoot = Join-Path $buildRoot "packaged smoke test"
 & (Join-Path $repoRoot "tests\verify_packaged_release.ps1") -AppDir $staging -TestRoot $packageTestRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged release smoke test failed"

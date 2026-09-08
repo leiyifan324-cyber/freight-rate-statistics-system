@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>物流运价系统 · 快速开始</title>
+<style>body{font:17px/1.8 system-ui,"Microsoft YaHei",sans-serif;background:#f4f7fb;color:#24374a;margin:0}main{max-width:900px;margin:36px auto;padding:0 22px 50px}h1{font-size:32px;margin-bottom:0}h2{font-size:23px;color:#126474}section{background:white;border:1px solid #dbe4ed;border-radius:12px;padding:18px 26px;margin:20px 0}.note{border-left:5px solid #dfa329;background:#fff9e8;padding:12px 18px}a{color:#126474}code{background:#eef3f8;padding:2px 5px;overflow-wrap:anywhere}li{margin:7px 0}small{color:#53677c}button{font:inherit;padding:7px 18px;border-radius:7px;border:1px solid #adb9c5;background:white;cursor:pointer}@media print{body{background:white}section{break-inside:avoid}button{display:none}}</style></head>
+<body><main><small>Windows 10 / 11 · 64位 · v1.4.2</small><h1>物流运价系统：照着做就能开始</h1><p>不需要安装 Python，不需要编程。只采集文字；图片报价跳过。首次接入需要你亲自扫码登录QQ。</p>
+<p class="note">请先在独立测试群验收，再统计正式业务。程序不包含腾讯QQ。内置NapCat有独立的非商业使用限制；商用需要另行取得其作者授权。切勿上传账号Token和聊天数据到GitHub。</p>
+<section><h2>① 安装与登录（第一次做）</h2><ol>
+<li>从<a href="https://github.com/leiyifan324-cyber/freight-rate-statistics-system/releases/latest">本项目最新版</a>下载 <b>Setup 安装版</b>，不是页面下方的“Source code”。双击安装，优先使用D盘推荐目录。没有D盘时会使用当前用户目录。</li>
+<li>先从<a href="https://im.qq.com/pcqq/index.shtml">腾讯官网安装64位QQ</a>。随后完全退出普通QQ，包括托盘图标。</li>
+<li>安装结束勾选“安装NapCatQQ组件”和“启动物流运价统计系统”。NapCat组件保存在本系统安装目录的 <code>NapCatQQ</code> 文件夹。请用已加入目标群的QQ扫码登录；验证码、风控提示需要你本人处理。</li>
+<li>打开NapCat启动日志显示的 WebUI 地址，使用日志中的WebUI Token登录。在“网络配置”启用 <b>OneBot 11 WebSocket服务器</b>：主机 <code>127.0.0.1</code>，端口 <code>3001</code>。设置访问Token后，在下一步的系统中填写相同Token。WebUI登录Token和OneBot访问Token不是同一个概念。</li>
+</ol><p>不要绑定 <code>0.0.0.0</code> 或把管理端口开放到公网。若NapCat菜单与此不同，请参照内置版本的官方说明，不要盲目复制其他版本配置。</p></section>
+<section><h2>② 配置自己的群和统计年度（第一次做）</h2><ol>
+<li>双击桌面的“物流运价系统管理”，打开本机页面；也可用开始菜单“启动物流运价系统”。默认 <a href="http://127.0.0.1:8765/?view=config">群与线路管理</a>。页面提示尚未配置群是正常的。</li>
+<li>连接地址填 <code>ws://127.0.0.1:3001</code>，访问Token与NapCat OneBot一致。添加你自己的群号、群名及默认始发地；公开版不带任何实际群号。</li>
+<li>检查线路与别名。如果贵港群不应采南宁始发，在该群“不统计的始发地”填“南宁”；南宁群相反填“贵港”。<b>群名不会自动决定过滤规则。</b></li>
+<li>点击“保存并自动应用”，等待状态为 connected。然后到 <a href="http://127.0.0.1:8765/?view=archive">年度归档</a> 填名称、开始日期，启用手动年度并确认。想从今天正式统计，就选今天；旧测试数据不会自动消失。</li>
+<li>确认顶部不是“已停止采集”；如果已停止，点 <b>开始采集</b>。connected只代表连接成功，不代表采集开关已打开。</li>
+</ol></section>
+<section><h2>③ 每天使用</h2><ol>
+<li>保持电脑、NapCat登录与网络正常；睡眠、关机、掉线期间没有送达程序的消息不能保证补回。</li>
+<li>到“数据与报表”选群，查看报价明细、日均统计和Excel。用“不合格消息”查看拒绝原因；有歧义的文字不会猜价。</li>
+<li>当天结束时点 <b>停止采集</b> 并确认，等待处理数变成0；核对当天数据，必要时按日期查询、预览并删除测试记录。</li>
+<li>选择群和日期，点 <b>生成当日图表</b>。每个群分别生成；它不会自动停止采集。数据后来变化会提示图表过期，需要重生成。</li>
+<li>下次开始工作时点 <b>开始采集</b>。暂停期间新消息不补采。年度结束用“年度归档”，不是每天点一次。</li>
+</ol><p>推荐文字：<code>贵港到佛山大板120元/吨</code>、<code>到杭州红板200/220 35吨</code>。报价数字不要拆开；车型、吨位、费用写明单位。每方报价不采集。</p></section>
+<section><h2>升级、常见问题</h2><ul>
+<li><b>旧版升级：</b>先备份整个 <code>data</code> 和两份配置JSON；停止采集、等待队列和Excel完成，用开始菜单“退出后台程序（升级前使用）”，再安装到原目录。安装器保留已有配置和数据。便携版先备份，再用完整新包覆盖程序文件，不要单独替换EXE。</li>
+<li><b>页面打不开：</b>用桌面入口重新启动；不要同时运行两份系统。若8765被其他软件占用，需要让维护人员修改本程序端口；不得强行结束不认识的进程。</li>
+<li><b>未连接：</b>检查QQ是否在线、OneBot是否启用、地址/端口/Token是否一致。网络恢复后程序会尝试重连；QQ重新登录必须本人完成。</li>
+<li><b>有消息但无数据：</b>检查采集开关、群白名单、线路范围、每群始发地排除规则、年度是否正在统计、消息是否属于未来日期或已重复。</li>
+<li><b>Excel被占用：</b>关闭Excel/WPS，等待重试；看到“待更新”不等于最新文件已成功覆盖。</li>
+<li><b>没有写入权限/磁盘不足：</b>暂停采集，先恢复空间和目录权限，再检查日志及队列。未能写入磁盘的消息不能保证恢复；不要自行删除数据库。</li>
+<li><b>下载或安全提示：</b>仅使用本项目GitHub Release。无商业签名，可能显示未知发布者；可以请维护人员比对同页SHA256SUMS.txt。若出现恶意软件拦截，不要关闭杀毒软件，先核验文件并反馈。</li>
+</ul><p>需要帮助时访问<a href="https://github.com/leiyifan324-cyber/freight-rate-statistics-system/issues">问题反馈</a>，只提供脱敏的错误、Windows版本和复现文字，不上传QQ登录态、Token或客户聊天。</p></section>
+<button onclick="window.print()">打印这份操作说明</button><p><small>测试覆盖不等于任意电脑、任意QQ版本或任何自然语言都100%可用；以对应Release公开的验收报告为准。</small></p></main></body></html>

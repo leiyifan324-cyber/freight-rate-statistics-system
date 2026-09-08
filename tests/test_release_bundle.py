@@ -27,7 +27,9 @@ def main() -> None:
             encoding="utf-8"
         )
     )
-    assert config["napcat_launcher"] == "%LOCALAPPDATA%\\NapCatQQ\\Start-NapCat.cmd"
+    assert config["napcat_launcher"] == "NapCatQQ\\Start-NapCat.cmd"
+    assert config["group_ids"] == [] and config["group_names"] == {}
+    assert config["ocr_enabled"] is False
     assert config["data_lifecycle"]["maintenance_interval_minutes"] == 1440
     assert config["data_lifecycle"]["processed_message_retention_days"] == 1
     assert config["data_lifecycle"]["rejected_message_retention_days"] == 1

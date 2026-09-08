@@ -5,6 +5,16 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $python = if ($env:FREIGHT_PYTHON) { $env:FREIGHT_PYTHON } else { "python" }
 
 $tests = @(
+    "test_release_manifest.py",
+    "test_release_onboarding.py",
+    "test_text_only_reliability.py",
+    "test_daily_controls.py",
+    "test_group_origin_filter.py",
+    "test_price_guards.py",
+    "test_default_baseline.py",
+    "test_manual_archive.py",
+    "test_quote_format_learning.py",
+    "test_data_management.py",
     "test_onebot_event_compatibility.py",
     "test_real_message_reception.py",
     "test_group_queue_pipeline.py",

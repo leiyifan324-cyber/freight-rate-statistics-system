@@ -33,6 +33,8 @@ def run_parser(mode: str, config: str = "", data_dir: str = "") -> int:
 
 
 def open_dashboard(config: str) -> int:
+    # The desktop/config entry must also work before autostart has run.
+    freight_supervisor.launch_supervisor(config)
     return 0 if freight_supervisor.open_dashboard_when_ready(
         config,
         view="config",

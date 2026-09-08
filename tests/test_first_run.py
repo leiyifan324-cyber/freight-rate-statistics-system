@@ -27,6 +27,13 @@ def main():
             live = json.load(stream)
         with open(os.path.join(ROOT, "config", "freight_rules.default.json"), "r", encoding="utf-8") as stream:
             rules = json.load(stream)
+        # Exercise an explicitly unconfigured install, independent of personal release defaults.
+        live['group_ids'] = []
+        live['group_names'] = {}
+        live['group_default_origins'] = {}
+        live['group_excluded_origins'] = {}
+        live['group_data_lifecycle'] = {}
+        live['ws_url'] = 'ws://127.0.0.1:9'
         live["output_root"] = os.path.join(directory, "data")
         live["rules_file"] = os.path.join(directory, "freight_rules.json")
         live["status_dashboard"]["port"] = port

@@ -24,10 +24,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+APP_VERSION = "1.4.2"
 REJECTED_COLUMNS = [
     "记录时间", "群号", "发布人", "消息时间", "原因", "消息文本", "媒体来源"
 ]
@@ -41,6 +42,24 @@ DEFAULT_DATA_LIFECYCLE = {
     "freight_record_retention_days": 0,
     "backup_retention_days": 30,
 }
+
+
+def normalize_excluded_origins(
+    value: object, origin_names: set[str], default_origin: str, group_id: str,
+) -> list[str]:
+    """Validate per-group exclusions against canonical origins, without global parser state."""
+    if not isinstance(value, list):
+        raise ValueError(f"群 {group_id} 不统计的始发地必须是标准始发地列表。")
+    result = []
+    for item in value:
+        if not isinstance(item, str) or item.strip() not in origin_names:
+            raise ValueError(f"群 {group_id} 不统计的始发地不存在，请使用标准始发地名称。")
+        origin = item.strip()
+        if origin == default_origin:
+            raise ValueError(f"群 {group_id} 不能排除自己的默认始发地“{origin}”。")
+        if origin not in result:
+            result.append(origin)
+    return result
 
 
 def normalize_data_lifecycle_config(
@@ -354,6 +373,19 @@ class FreightDatabase:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS deleted_data (
+                    kind TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    row_json TEXT NOT NULL,
+                    batch_id TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL,
+                    PRIMARY KEY(kind, record_id)
+                );
+                CREATE TRIGGER IF NOT EXISTS prevent_deleted_freight_replay
+                BEFORE INSERT ON freight_records
+                WHEN EXISTS(SELECT 1 FROM deleted_data WHERE kind='freight' AND record_id=NEW.dedup_key)
+                BEGIN SELECT RAISE(IGNORE); END;
 
                 CREATE TABLE IF NOT EXISTS inbound_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1341,18 +1373,21 @@ class FreightConfigurationManager:
         )
 
     @staticmethod
-    def _normalize_groups(rows, origin_names: set[str]) -> tuple[list[str], dict, dict]:
+    def _normalize_groups(
+        rows, origin_names: set[str], current_exclusions: dict | None = None,
+    ) -> tuple[list[str], dict, dict, dict]:
         if not isinstance(rows, list) or not rows:
             raise ValueError("至少需要保留一个QQ群。")
         group_ids = []
         group_names = {}
         default_origins = {}
+        exclusions = {}
         for index, row in enumerate(rows, start=1):
             if not isinstance(row, dict):
                 raise ValueError(f"QQ群第{index}行格式不正确。")
             FreightConfigurationManager._reject_unknown_fields(
                 row,
-                {"id", "name", "default_origin"},
+                {"id", "name", "default_origin", "excluded_origins"},
                 f"QQ群第{index}行",
             )
             group_id = str(row.get("id", "")).strip()
@@ -1373,7 +1408,14 @@ class FreightConfigurationManager:
             group_ids.append(group_id)
             group_names[group_id] = name
             default_origins[group_id] = default_origin
-        return group_ids, group_names, default_origins
+            # Omitted field from an older client keeps the guard; [] explicitly clears it.
+            blocked = normalize_excluded_origins(
+                row.get("excluded_origins", (current_exclusions or {}).get(group_id, [])),
+                origin_names, default_origin, group_id,
+            )
+            if blocked:
+                exclusions[group_id] = blocked
+        return group_ids, group_names, default_origins, exclusions
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -1382,6 +1424,7 @@ class FreightConfigurationManager:
         group_ids = [str(value) for value in live.get("group_ids", [])]
         names = live.get("group_names", {})
         origins_by_group = live.get("group_default_origins", {})
+        exclusions_by_group = live.get("group_excluded_origins", {})
         lifecycle = normalize_data_lifecycle_config(
             live.get("data_lifecycle"),
             live.get("backup_retention_days", 30),
@@ -1448,6 +1491,7 @@ class FreightConfigurationManager:
                     "id": group_id,
                     "name": str(names.get(group_id, "")),
                     "default_origin": str(origins_by_group.get(group_id, "")),
+                    "excluded_origins": list(exclusions_by_group.get(group_id, [])),
                 }
                 for group_id in group_ids
             ],
@@ -1550,8 +1594,9 @@ class FreightConfigurationManager:
             default_origin = next(iter(origins))
         if default_origin not in origins:
             raise ValueError("手动文本模式默认始发地必须引用现有标准始发地。")
-        group_ids, group_names, group_origins = self._normalize_groups(
-            payload.get("groups"), set(origins)
+        group_ids, group_names, group_origins, group_exclusions = self._normalize_groups(
+            payload.get("groups"), set(origins),
+            current_live_for_lifecycle.get("group_excluded_origins", {}),
         )
         raw_group_lifecycles = payload.get("group_lifecycles")
         if raw_group_lifecycles is None:
@@ -1633,6 +1678,7 @@ class FreightConfigurationManager:
             new_live["group_ids"] = group_ids
             new_live["group_names"] = group_names
             new_live["group_default_origins"] = group_origins
+            new_live["group_excluded_origins"] = group_exclusions
             new_live["ws_url"] = ws_url
             if clear_access_token:
                 new_live["access_token"] = ""
@@ -1790,7 +1836,7 @@ h1{margin:0}.tabs{display:flex;gap:8px}.tab,.primary,.secondary,.danger{border:0
 .ok{color:#07883e}.bad{color:#c62828}.muted{color:#6b7280}.hidden{display:none!important}
 .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:9px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:middle}
 input,textarea,select{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:9px 10px;font:inherit;background:white}textarea{min-height:70px;resize:vertical}
-.name{min-width:130px}.aliases{min-width:350px}.group-id{min-width:145px}.group-name{min-width:180px}.origin-select{min-width:140px}
+.name{min-width:130px}.aliases{min-width:350px}.group-id{min-width:145px}.group-name{min-width:180px}.origin-select{min-width:140px}.group-excluded{min-width:200px}
 #groupLifecycleRows .gl-group{min-width:150px;white-space:nowrap}#groupLifecycleRows input[type=number]{min-width:86px}
 .form-grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.actions{display:flex;align-items:center;gap:12px;position:sticky;bottom:12px}.actions .primary{min-width:150px}
 .notice{padding:12px 14px;border-radius:9px;background:#eff6ff;color:#1d4ed8}.notice.bad{background:#fef2f2;color:#b91c1c}
@@ -1806,7 +1852,7 @@ dialog{width:min(780px,calc(100vw - 32px));max-height:82vh;border:0;border-radiu
 <section class="card"><div class="section-title"><h2>NapCat连接</h2></div><p class="muted">OneBot地址和Token必须与NapCat WebUI中的WebSocket服务器一致；已保存的Token不会回传到页面，留空表示保留。</p><div class="form-grid"><label>OneBot WebSocket地址<input id="wsUrl" placeholder="ws://127.0.0.1:3001"></label><label>Access Token<input id="accessToken" type="password" autocomplete="new-password" placeholder="留空保留当前Token"><span id="tokenState" class="muted"></span><span><input id="clearAccessToken" type="checkbox" style="width:auto"> 清除已保存Token</span></label></div><label>NapCat启动器路径<input id="napcatLauncher" placeholder="例如 C:/NapCatQQ/launcher-user.bat"></label></section>
 <section class="card"><div class="section-title"><h2>实时处理与Excel</h2></div><p class="muted">消息先按群独立入队并实时入库；Excel短暂合并后追加，统计汇总按较低频率校准。</p><div class="form-grid"><label>断线重连间隔（秒）<input id="reconnectSeconds" type="number" min="1" max="300" step="1"></label><label>心跳检测间隔（秒）<input id="heartbeatSeconds" type="number" min="5" max="300" step="1"></label><label>Excel批量追加等待（秒）<input id="excelBatchSeconds" type="number" min="0" max="10" step="0.1"></label><label>Excel汇总刷新间隔（秒）<input id="excelFullRefreshSeconds" type="number" min="10" max="3600" step="10"></label></div></section>
 <section class="card"><div class="section-title"><h2>默认数据生命周期模板</h2><label><input id="lifecycleEnabled" type="checkbox" style="width:auto"> 启用自动维护</label></div><p class="muted">所有未设置专属策略的现有群和以后新增群都自动继承本模板。正式运价、消息去重、不合格和死信填0表示永久保留；待处理和处理中的消息永远不会被清理。</p><div class="form-grid"><label>维护间隔（分钟）<input id="lifecycleIntervalMinutes" type="number" min="5" max="1440" step="1"></label><label>正式运价保留天数（0=永久）<input id="freightRetentionDays" type="number" min="0" max="36500" step="1"></label><label>消息去重记录保留天数（0=永久）<input id="processedRetentionDays" type="number" min="0" max="36500" step="1"></label><label>不合格记录保留天数（0=永久）<input id="rejectedRetentionDays" type="number" min="0" max="36500" step="1"></label><label>死信保留天数（0=永久）<input id="deadLetterRetentionDays" type="number" min="0" max="36500" step="1"></label><label>每日备份保留天数<input id="backupRetentionDays" type="number" min="1" max="3650" step="1"></label></div></section>
-<section class="card"><div class="section-title"><h2>QQ群</h2><button id="addGroup" class="secondary">＋ 添加群</button></div><p class="muted">群内消息未写始发地时，按这里选择的默认始发地统计；每个群仍独立输出。</p><div class="table-wrap"><table><thead><tr><th>群号</th><th>群名称</th><th>默认始发地</th><th></th></tr></thead><tbody id="groupRows"></tbody></table></div></section>
+<section class="card"><div class="section-title"><h2>QQ群</h2><button id="addGroup" class="secondary">＋ 添加群</button></div><p class="muted">未写始发地时使用本群默认值。可填写“不统计的始发地”（标准名称，多个用逗号分隔；留空不额外限制）。别名先归为标准始发地再过滤，不会只因正文提到地名而拦截。仅影响保存后处理的新消息，不改历史报价。</p><div class="table-wrap"><table><thead><tr><th>群号</th><th>群名称</th><th>默认始发地</th><th>不统计的始发地</th><th></th></tr></thead><tbody id="groupRows"></tbody></table></div></section>
 <section class="card"><div class="section-title"><h2>群专属生命周期（可选）</h2></div><p class="muted">默认关闭，表示继承上方模板。只有确实需要不同保留策略的群才开启专属配置；关闭后立即恢复继承。</p><div class="table-wrap"><table><thead><tr><th>群</th><th>专属</th><th>自动维护</th><th>间隔/分钟</th><th>正式/天</th><th>去重/天</th><th>不合格/天</th><th>死信/天</th><th>备份/天</th></tr></thead><tbody id="groupLifecycleRows"></tbody></table></div></section>
 <section class="card"><div class="section-title"><h2>始发地范围</h2><button id="addOrigin" class="secondary">＋ 添加始发地</button></div><p class="muted">标准名称用于统计；别名可填写市、区、县、镇等写法，用逗号分隔。</p><div class="table-wrap"><table><thead><tr><th>标准始发地</th><th>识别别名</th><th></th></tr></thead><tbody id="originRows"></tbody></table></div><div class="form-grid"><label>手动文本模式默认始发地<select id="manualDefaultOrigin"></select></label></div></section>
 <section class="card"><div class="section-title"><h2>目的地范围（线路）</h2><button id="addDestination" class="secondary">＋ 添加目的地</button></div><p class="muted">新增标准目的地后，它会与所有始发地自动形成可统计线路。</p><div class="table-wrap"><table><thead><tr><th>标准目的地</th><th>识别的城市/区县别名</th><th></th></tr></thead><tbody id="destinationRows"></tbody></table></div></section>
@@ -1823,7 +1869,7 @@ let NEXT_GROUP_ROW_KEY=0;
 let ACTIVE_SCOPE_ROW=null;
 function esc(v){return String(v??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]))}
 function options(selected=''){const names=$$('#originRows .loc-name').map(x=>x.value.trim()).filter(Boolean);if(selected&&!names.includes(selected))names.push(selected);return names.map(x=>`<option ${x===selected?'selected':''}>${esc(x)}</option>`).join('')}
-function groupRow(g={}){const tr=document.createElement('tr');tr.dataset.rowKey=String(++NEXT_GROUP_ROW_KEY);tr.innerHTML=`<td><input class="group-id" inputmode="numeric" value="${esc(g.id||'')}"></td><td><input class="group-name" value="${esc(g.name||'')}"></td><td><select class="origin-select">${options(g.default_origin||'')}</select></td><td><button class="danger remove">删除</button></td>`;tr.querySelector('.remove').onclick=()=>{tr.remove();syncGroupLifecycleRows()};tr.querySelector('.group-id').addEventListener('input',()=>updateGroupLifecycleLabel(tr));tr.querySelector('.group-name').addEventListener('input',()=>updateGroupLifecycleLabel(tr));return tr}
+function groupRow(g={}){const tr=document.createElement('tr');tr.dataset.rowKey=String(++NEXT_GROUP_ROW_KEY);tr.innerHTML=`<td><input class="group-id" inputmode="numeric" value="${esc(g.id||'')}"></td><td><input class="group-name" value="${esc(g.name||'')}"></td><td><select class="origin-select">${options(g.default_origin||'')}</select></td><td><input class="group-excluded" aria-label="不统计的始发地" value="${esc((g.excluded_origins||[]).join('，'))}" placeholder="标准名称；留空不限制"></td><td><button class="danger remove">删除</button></td>`;tr.querySelector('.remove').onclick=()=>{tr.remove();syncGroupLifecycleRows()};tr.querySelector('.group-id').addEventListener('input',()=>updateGroupLifecycleLabel(tr));tr.querySelector('.group-name').addEventListener('input',()=>updateGroupLifecycleLabel(tr));return tr}
 function defaultLifecycleFromForm(){return {enabled:$('#lifecycleEnabled').checked,maintenance_interval_minutes:$('#lifecycleIntervalMinutes').value,freight_record_retention_days:$('#freightRetentionDays').value,processed_message_retention_days:$('#processedRetentionDays').value,rejected_message_retention_days:$('#rejectedRetentionDays').value,dead_letter_retention_days:$('#deadLetterRetentionDays').value,backup_retention_days:$('#backupRetentionDays').value}}
 function lifecyclePolicyFromRow(tr){return {enabled:tr.querySelector('.gl-enabled').checked,maintenance_interval_minutes:tr.querySelector('.gl-interval').value,freight_record_retention_days:tr.querySelector('.gl-freight').value,processed_message_retention_days:tr.querySelector('.gl-processed').value,rejected_message_retention_days:tr.querySelector('.gl-rejected').value,dead_letter_retention_days:tr.querySelector('.gl-dead').value,backup_retention_days:tr.querySelector('.gl-backup').value}}
 function applyLifecyclePolicyToRow(tr,p){tr.querySelector('.gl-enabled').checked=p.enabled!==false;tr.querySelector('.gl-interval').value=p.maintenance_interval_minutes??60;tr.querySelector('.gl-freight').value=p.freight_record_retention_days??0;tr.querySelector('.gl-processed').value=p.processed_message_retention_days??365;tr.querySelector('.gl-rejected').value=p.rejected_message_retention_days??180;tr.querySelector('.gl-dead').value=p.dead_letter_retention_days??30;tr.querySelector('.gl-backup').value=p.backup_retention_days??30}
@@ -1852,7 +1898,7 @@ async function refreshAll(){await Promise.all([refreshStatus(),refreshRecent()])
 async function loadConfig(){const r=await fetch('/api/config',{cache:'no-store'});if(!r.ok){const x=await r.json().catch(()=>({}));throw Error(x.error||'配置读取失败')}CSRF_TOKEN=r.headers.get('X-Freight-CSRF-Token')||CSRF_TOKEN;const c=await r.json();CONFIG_VERSION=c.version||'';const n=c.connection||{},p=c.processing||{},l=c.lifecycle||{};$('#wsUrl').value=n.ws_url||'ws://127.0.0.1:3001';$('#accessToken').value='';$('#clearAccessToken').checked=false;$('#tokenState').textContent=n.access_token_configured?'当前已设置Token':'当前未设置Token';$('#napcatLauncher').value=n.napcat_launcher||'';$('#reconnectSeconds').value=p.reconnect_seconds??5;$('#heartbeatSeconds').value=p.heartbeat_seconds??15;$('#excelBatchSeconds').value=p.excel_batch_seconds??0.5;$('#excelFullRefreshSeconds').value=p.excel_full_refresh_seconds??60;$('#lifecycleEnabled').checked=l.enabled!==false;$('#lifecycleIntervalMinutes').value=l.maintenance_interval_minutes??60;$('#freightRetentionDays').value=l.freight_record_retention_days??0;$('#processedRetentionDays').value=l.processed_message_retention_days??365;$('#rejectedRetentionDays').value=l.rejected_message_retention_days??180;$('#deadLetterRetentionDays').value=l.dead_letter_retention_days??30;$('#backupRetentionDays').value=l.backup_retention_days??30;$('#originRows').replaceChildren(...c.origins.map(x=>locationRow(x,'origin')));$('#destinationRows').replaceChildren(...c.destinations.map(x=>locationRow(x,'destination')));$('#groupRows').replaceChildren(...c.groups.map(groupRow));syncGroupLifecycleRows(true,c.group_lifecycles||{});$('#defaultCargoCategory').value=c.default_cargo_category||'板材';$('#cargoRows').replaceChildren(...(c.cargo_types||[]).map(cargoRow));$('#cargoScopeRows').replaceChildren(...(c.cargo_route_scopes||[]).map(cargoScopeRow));syncCargoReferences(c.default_cargo_subcategory||'');$('#priceThreshold').value=c.price_threshold;refreshOriginSelects(c.default_origin||'')}
 function splitValues(v){return String(v||'').replaceAll(String.fromCharCode(10),'，').replaceAll(String.fromCharCode(13),'，').split(/[,，、;；]+/).map(x=>x.trim()).filter(Boolean)}
 function collectLocations(selector){return $$(selector+' tr').map(tr=>({name:tr.querySelector('.loc-name').value.trim(),aliases:splitValues(tr.querySelector('.loc-aliases').value)}))}
-function collectConfig(){const groups=$$('#groupRows tr').map(tr=>({id:tr.querySelector('.group-id').value.trim(),name:tr.querySelector('.group-name').value.trim(),default_origin:tr.querySelector('.origin-select').value}));const lifecycleRows=Object.fromEntries($$('#groupLifecycleRows tr').map(tr=>[tr.dataset.rowKey,tr]));const group_lifecycles={};$$('#groupRows tr').forEach(tr=>{const policyRow=lifecycleRows[tr.dataset.rowKey];const groupId=tr.querySelector('.group-id').value.trim();if(groupId&&policyRow?.querySelector('.gl-use').checked)group_lifecycles[groupId]=lifecyclePolicyFromRow(policyRow)});const cargo_types=collectCargoTypes();return {version:CONFIG_VERSION,connection:{ws_url:$('#wsUrl').value.trim(),access_token:$('#accessToken').value.trim(),clear_access_token:$('#clearAccessToken').checked,napcat_launcher:$('#napcatLauncher').value.trim()},processing:{reconnect_seconds:$('#reconnectSeconds').value,heartbeat_seconds:$('#heartbeatSeconds').value,excel_batch_seconds:$('#excelBatchSeconds').value,excel_full_refresh_seconds:$('#excelFullRefreshSeconds').value},lifecycle:defaultLifecycleFromForm(),group_lifecycles,groups,origins:collectLocations('#originRows'),destinations:collectLocations('#destinationRows'),default_origin:$('#manualDefaultOrigin').value,board_types:cargo_types.map(x=>x.name),cargo_types,default_cargo_subcategory:$('#defaultCargoSubcategory').value,default_cargo_category:$('#defaultCargoCategory').value.trim(),cargo_route_scopes:collectCargoScopes(),price_threshold:$('#priceThreshold').value}}
+function collectConfig(){const groups=$$('#groupRows tr').map(tr=>({id:tr.querySelector('.group-id').value.trim(),name:tr.querySelector('.group-name').value.trim(),default_origin:tr.querySelector('.origin-select').value,excluded_origins:splitValues(tr.querySelector('.group-excluded').value)}));const lifecycleRows=Object.fromEntries($$('#groupLifecycleRows tr').map(tr=>[tr.dataset.rowKey,tr]));const group_lifecycles={};$$('#groupRows tr').forEach(tr=>{const policyRow=lifecycleRows[tr.dataset.rowKey];const groupId=tr.querySelector('.group-id').value.trim();if(groupId&&policyRow?.querySelector('.gl-use').checked)group_lifecycles[groupId]=lifecyclePolicyFromRow(policyRow)});const cargo_types=collectCargoTypes();return {version:CONFIG_VERSION,connection:{ws_url:$('#wsUrl').value.trim(),access_token:$('#accessToken').value.trim(),clear_access_token:$('#clearAccessToken').checked,napcat_launcher:$('#napcatLauncher').value.trim()},processing:{reconnect_seconds:$('#reconnectSeconds').value,heartbeat_seconds:$('#heartbeatSeconds').value,excel_batch_seconds:$('#excelBatchSeconds').value,excel_full_refresh_seconds:$('#excelFullRefreshSeconds').value},lifecycle:defaultLifecycleFromForm(),group_lifecycles,groups,origins:collectLocations('#originRows'),destinations:collectLocations('#destinationRows'),default_origin:$('#manualDefaultOrigin').value,board_types:cargo_types.map(x=>x.name),cargo_types,default_cargo_subcategory:$('#defaultCargoSubcategory').value,default_cargo_category:$('#defaultCargoCategory').value.trim(),cargo_route_scopes:collectCargoScopes(),price_threshold:$('#priceThreshold').value}}
 async function waitForRestart(){let attempts=0;const timer=setInterval(async()=>{attempts++;try{const r=await fetch('/api/config',{cache:'no-store'});if(r.ok){clearInterval(timer);await loadConfig();await refreshStatus();$('#saveConfig').disabled=false;$('#saveMessage').className='ok';$('#saveMessage').textContent='配置已应用，采集器已恢复运行。'}}catch(e){}if(attempts>30){clearInterval(timer);$('#saveConfig').disabled=false;$('#saveMessage').className='bad';$('#saveMessage').textContent='等待重启超时，请查看运行状态或启动器。'}},2000)}
 async function saveConfig(){const button=$('#saveConfig');button.disabled=true;$('#saveMessage').className='muted';$('#saveMessage').textContent='正在校验并保存...';try{const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Freight-CSRF':CSRF_TOKEN},body:JSON.stringify(collectConfig())});const x=await r.json();if(!r.ok)throw Error(x.error||'保存失败');CONFIG_VERSION=x.version||CONFIG_VERSION;$('#saveMessage').className='ok';$('#saveMessage').textContent=x.message;setTimeout(waitForRestart,2000)}catch(e){button.disabled=false;$('#saveMessage').className='bad';$('#saveMessage').textContent=e.message}}
 $$('.tab').forEach(b=>b.onclick=async()=>{$$('.tab').forEach(x=>x.classList.toggle('active',x===b));const config=b.dataset.view==='config';$('#statusView').classList.toggle('hidden',config);$('#configView').classList.toggle('hidden',!config);if(config)try{await loadConfig()}catch(e){$('#saveMessage').className='bad';$('#saveMessage').textContent=e.message}});
@@ -1869,6 +1915,7 @@ def start_status_dashboard(
     logger: logging.Logger | None = None,
     configuration: FreightConfigurationManager | None = None,
     recent_data_provider: Callable[[int], dict] | None = None,
+    data_service=None,
 ) -> ThreadingHTTPServer | None:
     csrf_token = secrets.token_urlsafe(32)
 
@@ -1882,7 +1929,7 @@ def start_status_dashboard(
                 "Content-Security-Policy",
                 "default-src 'self'; script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; connect-src 'self'; "
-                "img-src 'none'; object-src 'none'; base-uri 'none'; "
+                "img-src 'self'; object-src 'none'; base-uri 'none'; "
                 "frame-ancestors 'none'",
             )
 
@@ -1917,14 +1964,64 @@ def start_status_dashboard(
                 return
             parsed_url = urlparse(self.path)
             request_path = parsed_url.path
+            if request_path.startswith("/api/data/"):
+                if data_service is None:
+                    self.send_json(503, {"error": "数据服务尚未启动。"})
+                    return
+                params = {key: values[-1] for key, values in parse_qs(parsed_url.query).items()}
+                try:
+                    if configuration and configuration.restart_pending():
+                        self.send_json(409, {"error": "系统正在重新加载，请稍后刷新。"})
+                        return
+                    routes = {
+                        "/api/data/options": lambda: data_service.options(),
+                        "/api/data/records": lambda: data_service.query(params),
+                        "/api/data/statistics": lambda: data_service.statistics(params),
+                        "/api/data/files": lambda: data_service.files(params),
+                        "/api/data/file-preview": lambda: data_service.preview_file(params),
+                        "/api/data/archive-status": lambda: data_service.archive.status(),
+                        "/api/data/archive-details": lambda: data_service.archive.details(params),
+                        "/api/data/collection-status": lambda: data_service.collection_status(),
+                        "/api/data/daily-status": lambda: data_service.daily.status(params),
+                    }
+                    if request_path in routes:
+                        self.send_json(200, routes[request_path]())
+                    elif request_path == "/api/data/file":
+                        path = data_service.file_path(params)
+                        mime = {".png": "image/png", ".csv": "text/csv; charset=utf-8",
+                                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+                        with path.open("rb") as stream:
+                            self.send_response(200)
+                            self.send_header("Content-Type", mime[path.suffix.lower()])
+                            disposition = "inline" if path.suffix.lower() == ".png" and params.get("download") != "1" else "attachment"
+                            self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(path.name)}")
+                            self.send_security_headers()
+                            self.send_header("Content-Length", str(os.fstat(stream.fileno()).st_size))
+                            self.end_headers()
+                            shutil.copyfileobj(stream, self.wfile)
+                    else:
+                        self.send_json(404, {"error": "接口不存在。"})
+                except ValueError as exc:
+                    self.send_json(400, {"error": str(exc)})
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass
+                except (OSError, sqlite3.OperationalError):
+                    self.send_json(409, {"error": "数据或报表正在更新，请稍后重试。"})
+                except Exception:
+                    if logger:
+                        logger.exception("数据查询失败")
+                    self.send_json(500, {"error": "查询失败，请查看日志。"})
+                return
             if request_path == "/api/health":
                 current = status.snapshot()
                 self.send_json(200, {
                     "ok": True,
                     "service": "freight-collector",
+                    "version": APP_VERSION,
                     "connection": current.get("connection", "unknown"),
                     "configured": current.get("connection") != "setup_required",
-                    "accepting_messages": current.get("connection") == "connected",
+                    "accepting_messages": current.get("connection") == "connected" and (data_service is None or data_service.collection_status()['enabled']),
+                    "collection": data_service.collection_status() if data_service else None,
                     "updated_at": current.get("updated_at", ""),
                 })
                 return
@@ -1965,7 +2062,10 @@ def start_status_dashboard(
             if request_path != "/":
                 self.send_json(404, {"error": "接口不存在。"})
                 return
-            html = DASHBOARD_HTML.replace(
+            from freight_data_ui import extend_dashboard
+            from freight_archive_ui import extend_archive_dashboard
+            from freight_daily_ui import extend_daily_dashboard
+            html = extend_daily_dashboard(extend_archive_dashboard(extend_dashboard(DASHBOARD_HTML))).replace(
                 "__FREIGHT_CSRF_TOKEN__",
                 json.dumps(csrf_token),
             )
@@ -1981,7 +2081,9 @@ def start_status_dashboard(
         def do_POST(self):
             if self.reject_bad_host():
                 return
-            if self.path.split("?", 1)[0] != "/api/config" or not configuration:
+            request_path = self.path.split("?", 1)[0]
+            data_action = request_path in {"/api/data/delete-preview", "/api/data/delete", '/api/data/archive-open', '/api/data/archive-preview', '/api/data/archive-close', '/api/data/archive-retry', '/api/data/collection-change', '/api/data/daily-generate'}
+            if not ((request_path == "/api/config" and configuration) or (data_action and data_service)):
                 self.send_json(404, {"error": "接口不存在。"})
                 return
             if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
@@ -2002,7 +2104,7 @@ def start_status_dashboard(
             except socket.timeout:
                 self.send_json(408, {"error": "读取配置请求超时。"})
                 return
-            if configuration.restart_pending():
+            if configuration and configuration.restart_pending():
                 self.send_json(409, {"error": "采集器正在重新加载，请稍后再保存。"})
                 return
             origin = self.headers.get("Origin", "")
@@ -2024,6 +2126,25 @@ def start_status_dashboard(
             try:
                 body = raw_body.decode("utf-8")
                 submitted = json.loads(body)
+                if data_action:
+                    from freight_data import DataConflictError
+                    if not isinstance(submitted, dict):
+                        raise ValueError("请求内容必须是对象。")
+                    try:
+                        actions = {'/api/data/delete-preview': data_service.preview_delete,
+                            '/api/data/delete':data_service.delete,
+                            '/api/data/archive-open':data_service.archive.open,
+                            '/api/data/archive-preview':data_service.archive.preview_close,
+                            '/api/data/archive-close':data_service.archive.close,
+                            '/api/data/archive-retry':data_service.archive.retry,
+                            '/api/data/collection-change':data_service.collection_change,
+                            '/api/data/daily-generate':data_service.daily.generate}
+                        result = actions[request_path](submitted)
+                    except DataConflictError as exc:
+                        self.send_json(409, {"error": str(exc)})
+                        return
+                    self.send_json(200, result)
+                    return
                 if not isinstance(submitted, dict) or not submitted.get("version"):
                     self.send_json(428, {"error": "缺少配置版本，请刷新页面后重试。"})
                     return

@@ -15,7 +15,7 @@ AppVersion={#AppVersion}
 AppPublisher=leiyifan324-cyber
 AppPublisherURL=https://github.com/leiyifan324-cyber/freight-rate-statistics-system
 AppSupportURL=https://github.com/leiyifan324-cyber/freight-rate-statistics-system/issues
-DefaultDirName={localappdata}\FreightQuoteSystem
+DefaultDirName={code:GetDefaultInstallDir}
 DefaultGroupName=物流运价统计系统
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -27,7 +27,9 @@ WizardStyle=modern
 OutputDir={#OutputDir}
 OutputBaseFilename=FreightQuoteSystem-Setup-v{#AppVersion}
 UninstallDisplayName=物流运价统计系统
-AppMutex=Local\FreightRateStatisticsSystemSupervisor
+CloseApplications=yes
+RestartApplications=no
+MinVersion=10.0
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: ".\ChineseSimplified.isl"
@@ -42,8 +44,9 @@ Name: "{group}\启动物流运价系统"; Filename: "{app}\FreightQuoteSystem.ex
 Name: "{group}\群与线路管理"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode open-dashboard"
 Name: "{group}\手动文本统计"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode manual"
 Name: "{group}\安装或更新NapCatQQ"; Filename: "{app}\安装NapCatQQ.bat"
-Name: "{group}\使用说明"; Filename: "{app}\docs\03-正常使用.md"
-Name: "{autodesktop}\物流运价系统管理"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode open-dashboard"; Tasks: desktopicon
+Name: "{group}\使用说明（新手必读）"; Filename: "{app}\快速开始.html"
+Name: "{group}\退出后台程序（升级前使用）"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode shutdown"
+Name: "{autodesktop}\物流运价系统管理"; Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode start"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面管理入口"; GroupDescription: "快捷方式："; Flags: checkedonce
@@ -58,3 +61,12 @@ Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode start"; Flags: now
 [UninstallRun]
 Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode uninstall-autostart"; RunOnceId: "RemoveAutostart"; Flags: runhidden waituntilterminated
 Filename: "{app}\FreightQuoteSystem.exe"; Parameters: "--mode shutdown"; RunOnceId: "ShutdownApplication"; Flags: runhidden waituntilterminated
+
+[Code]
+function GetDefaultInstallDir(Param: String): String;
+begin
+  if DirExists('D:\') then
+    Result := 'D:\FreightQuoteSystem'
+  else
+    Result := ExpandConstant('{localappdata}\FreightQuoteSystem');
+end;
