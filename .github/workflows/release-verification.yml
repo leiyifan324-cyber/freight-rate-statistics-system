@@ -1,0 +1,44 @@
+name: Verify published Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to download and test
+        required: true
+        default: v1.4.2
+
+permissions:
+  contents: read
+
+jobs:
+  download-install-upgrade:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Download published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: powershell
+        run: |
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir release-download
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+      - name: Verify checksums, offline first run, setup, upgrade and uninstall
+        shell: powershell
+        run: ./tests/verify_release_assets.ps1 -ReleaseDir ./release-download -TestRoot "$env:RUNNER_TEMP/release acceptance" -DisposableMachine
+      - name: Retain acceptance evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-release-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/release acceptance/asset-verification.json
+            ${{ runner.temp }}/release acceptance/setup.log
+          if-no-files-found: warn

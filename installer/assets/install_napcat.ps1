@@ -31,7 +31,7 @@ if ($actualHash -ne $expectedHash) {
 }
 
 if (-not $InstallRoot) {
-    $InstallRoot = Join-Path $env:LOCALAPPDATA "NapCatQQ"
+    $InstallRoot = Join-Path $scriptRoot "NapCatQQ"
 }
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
 $versionDirectory = Join-Path $InstallRoot ([string]$manifest.version)

@@ -1,14 +1,15 @@
 {
   "ws_url": "ws://127.0.0.1:3001",
   "access_token": "",
-  "napcat_launcher": "%LOCALAPPDATA%\\NapCatQQ\\Start-NapCat.cmd",
+  "napcat_launcher": "NapCatQQ\\Start-NapCat.cmd",
   "group_ids": [],
   "group_names": {},
   "group_default_origins": {},
   "output_root": "data",
+  "group_excluded_origins": {},
   "rules_file": "freight_rules.json",
   "accept_self_messages": true,
-  "ocr_enabled": true,
+  "ocr_enabled": false,
   "ocr_script": "windows_ocr.ps1",
   "status_dashboard": {
     "enabled": true,

@@ -128,8 +128,8 @@ $config = [ordered]@{
 )
 
 $process = Start-Process -FilePath $executable -ArgumentList @(
-    "--mode", "qq-live", "--config", $configPath
-) -PassThru
+    "--mode", "qq-live", "--config", ('"' + $configPath + '"')
+) -WindowStyle Hidden -PassThru
 try {
     $status = $null
     $managerConfig = $null
