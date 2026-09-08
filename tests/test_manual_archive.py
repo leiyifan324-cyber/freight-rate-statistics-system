@@ -120,7 +120,9 @@ class ManualArchiveTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),before)
         self.assertEqual(self.service.statistics({'group_id':'1001'})['quote_count'],0)
         self.assertTrue(self.service.files({'group_id':'1001'})['report_state']['manual'])
-        self.assertEqual(self.service.file_path({'group_id':'1001','path':details['groups'][0]['path']}),path)
+        # Windows CI may expose TEMP using an 8.3 alias (RUNNER~1). Verify
+        # physical file identity, not two spellings of the same valid path.
+        self.assertTrue(self.service.file_path({'group_id':'1001','path':details['groups'][0]['path']}).samefile(path))
 
     def test_pause_and_later_open_excludes_previous_and_future_receipts(self):
         self.open_year()
